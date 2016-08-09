@@ -61,6 +61,7 @@ typedef struct
 {
     char    *args[1];
     char    *export_file;
+    char    *render_options_file;
 } args_t;
 
 #ifndef NO_ARGP
@@ -73,6 +74,7 @@ static char args_doc[] = "[FILE]";
 
 static struct argp_option options[] = {
 	{"export",   'e', "FILE", 0, "Export to FILE the source project." },
+	{"render",   'r', "FILE", 0, "Load render options from the FILE." },
 	{0}
 };
 
@@ -83,6 +85,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
 
     switch (key)
     {
+	case 'r':
+		args->render_options_file = arg;
+		break;
 	case 'e':
 		args->export_file = arg;
 		break;
@@ -185,7 +190,11 @@ int main(int argc, char **argv)
 
     goxel_init(g_goxel);
     
-    
+    if (args.render_options_file)
+    {
+		// TO DO
+		//~ goxel_load_render_options(args.render_options_file);
+	}
     
     if (args.args[0]) {
         if (str_endswith(args.args[0], ".qb"))
