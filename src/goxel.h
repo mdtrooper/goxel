@@ -1090,4 +1090,9 @@ void mustache_free(mustache_t *m);
 void export_as_png(goxel_t *goxel, const char *path);
 void export_as_txt(goxel_t *goxel, const char *path);
 
+#define CONF_ALL 0
+#define CONF_RENDER 1
+bool save_conf(goxel_t *goxel, char* path, int type);
+bool load_conf(goxel_t *goxel, char* path);
+
 #endif // GOXEL_H

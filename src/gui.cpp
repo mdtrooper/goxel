@@ -22,6 +22,7 @@ extern "C" {
 
 #include "imgui.h"
 
+
 static inline ImVec4 IMHEXCOLOR(uint32_t v)
 {
     uvec4b_t c = HEXCOLOR(v);
@@ -976,11 +977,10 @@ static void render_panel(goxel_t *goxel)
         render_advanced_panel(goxel);
     
     if (ImGui::Button("Load")) {
-		// TO DO
 		// The code to load the render options from a file (format ini??)
 		
-        //~ char *path;
-        //~ if (dialog_open(DIALOG_FLAG_OPEN, "goxcf\0*.goxcf\0", &path)) {
+        char *path;
+        if (dialog_open(DIALOG_FLAG_OPEN, "ini\0*.ini\0", &path)) {
             //~ FILE *f = fopen(path, "r");
             //~ int nb;
             //~ nb = fread(gui->prog_buff, 1, sizeof(gui->prog_buff), f);
@@ -988,26 +988,18 @@ static void render_panel(goxel_t *goxel)
             //~ fclose(f);
             //~ strcpy(gui->prog_path, path);
             //~ free(path);
-        //~ }
+        }
         //~ proc_parse(gui->prog_buff, proc);
     }
     ImGui::SameLine();
     if (ImGui::Button("Save")) {
-		// TO DO
 		// The code to save the render options from a file (format ini??)
 		
-        //~ if (!*gui->prog_path) {
-            //~ char *path;
-            //~ if (dialog_open(DIALOG_FLAG_SAVE, "goxcf\0*.goxcf\0", &path)) {
-                //~ strcpy(gui->prog_path, path);
-                //~ free(path);
-            //~ }
-        //~ }
-        //~ if (*gui->prog_path) {
-            //~ FILE *f = fopen(gui->prog_path, "w");
-            //~ fwrite(gui->prog_buff, strlen(gui->prog_buff), 1, f);
-            //~ fclose(f);
-        //~ }
+		char *path;
+        if (dialog_open(DIALOG_FLAG_SAVE, "ini\0*.ini\0", &path)) {
+			save_conf(goxel, path, CONF_RENDER);
+		}
+		
     }
     
     ImGui::PopID();

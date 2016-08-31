@@ -709,3 +709,92 @@ ACTION_REGISTER(fill_selection,
     .sig = SIG(TYPE_VOID, ARG("goxel", TYPE_GOXEL),
                           ARG("layer", TYPE_LAYER)),
 )
+
+bool save_conf(goxel_t *goxel, char* path, int type) {
+	FILE *f = fopen(path, "w");
+	
+	char line[200];
+	
+	fwrite("[render]\n", strlen("[render]\n"), sizeof(char), f);
+	
+	if (goxel->camera.ortho) {
+		sprintf(line, "ortho=%i\n", 1);
+	}
+	else {
+		sprintf(line, "ortho=%i\n", 0);
+	}
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	fwrite("\n", strlen("\n"), sizeof(char), f);
+	
+	sprintf(line, "distance=%f\n", goxel->camera.dist);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	fwrite("\n", strlen("\n"), sizeof(char), f);
+	
+	sprintf(line, "offset_x=%f\n", goxel->camera.ofs.x);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "offset_y=%f\n", goxel->camera.ofs.y);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "offset_z=%f\n", goxel->camera.ofs.z);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	fwrite("\n", strlen("\n"), sizeof(char), f);
+	
+	vec3_t rot_euler = quat_to_euler(goxel->camera.rot);
+    real_t rot_x = rot_euler.x * DR2D;
+    rot_x = fmod(rot_x + 360, 360);
+    real_t rot_y = rot_euler.y * DR2D;
+    rot_y = fmod(rot_y + 360, 360);
+    real_t rot_z = rot_euler.z * DR2D;
+    rot_z = fmod(rot_z + 360, 360);
+	
+	sprintf(line, "rotation_x=%f\n", rot_x);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "rotation_y=%f\n", rot_y);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "rotation_z=%f\n", rot_z);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	fwrite("\n", strlen("\n"), sizeof(char), f);
+	
+	// WIP
+	
+	fwrite("\n", strlen("\n"), sizeof(char), f);
+	
+	sprintf(line, "shadow=%f\n", 111.222);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	fwrite("\n", strlen("\n"), sizeof(char), f);
+	
+	sprintf(line, "light_pitch=%f\n", 111.222);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "light_yaw=%f\n", 111.222);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "light_fixed=%i\n", 111);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "light_bshadow=%f\n", 111.222);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "light_ambient=%f\n", 111.222);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	sprintf(line, "light_diffuse=%f\n", 111.222);
+	fwrite(line, strlen(line), sizeof(char), f);
+	
+	fclose(f);
+	
+	return false;
+}
+
+bool load_conf(goxel_t *goxel, char* path)
+{
+	return false;
+}
