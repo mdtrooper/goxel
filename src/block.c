@@ -196,11 +196,6 @@ static int mc_compute(uint8_t cube_index, const uvec4b_t neighboors[8],
     return nb_tri;
 }
 
-static int make_id(void)
-{
-    return ++goxel()->block_next_id;
-}
-
 static block_data_t *get_empty_data(void)
 {
     static block_data_t *data = NULL;
@@ -576,7 +571,7 @@ static void block_prepare_write(block_t *block)
     memcpy(data->voxels, block->data->voxels, N * N * N * 4);
     data->ref = 1;
     block->data = data;
-    block->data->id = make_id();
+    block->data->id = ++goxel()->next_uid;
     goxel()->block_count++;
 }
 
@@ -595,10 +590,10 @@ void block_fill(block_t *block,
     }
 }
 
-static bool can_skip(uvec4b_t v, int op, const uvec4b_t *c)
+static bool can_skip(uvec4b_t v, int mode, uvec4b_t c)
 {
-    return (v.a && (op == OP_ADD) && uvec4b_equal(*c, v)) ||
-            (!v.a && (op == OP_SUB || op == OP_PAINT));
+    return (v.a && (mode == MODE_ADD) && uvec4b_equal(c, v)) ||
+            (!v.a && IS_IN(mode, MODE_SUB, MODE_PAINT, MODE_SUB_CLAMP));
 }
 
 static void apply_op(uvec4b_t *v, int op, const uvec4b_t *c, uint8_t k)

@@ -378,7 +378,7 @@ typedef struct {
     };
 } arg_t;
 
-#define ARG(n, v) {n, {(long)v}}
+#define ARG(n, v) {n, {(intptr_t)(v)}}
 #define ARGS(...) (const arg_t[]){__VA_ARGS__, ARG(0, 0)}
 
 // Represent a function signature with return type and arguments.
@@ -438,11 +438,13 @@ void *action_exec(const action_t *action, const arg_t *args);
 
 // #### Tool/Operation/Painter #
 enum {
-    OP_NULL,
-    OP_ADD,
-    OP_SUB,
-    OP_PAINT,
-    OP_INTERSECT,
+    MODE_NULL,
+    MODE_ADD,
+    MODE_SUB,
+    MODE_SUB_CLAMP,
+    MODE_PAINT,
+    MODE_MAX,
+    MODE_INTERSECT,
 };
 
 enum {
@@ -457,6 +459,12 @@ enum {
     TOOL_PROCEDURAL,
 };
 
+// Mesh mask for goxel_update_meshes function.
+enum {
+    MESH_LAYERS = 1 << 0,
+    MESH_PICK   = 1 << 1,
+};
+
 typedef struct shape {
     const char *id;
     float (*func)(const vec3_t *p, const vec3_t *s, float smoothness);
@@ -468,10 +476,10 @@ extern shape_t shape_cube;
 extern shape_t shape_cylinder;
 
 
-// The painting context, including the tool, brush, operation, radius,
+// The painting context, including the tool, brush, mode, radius,
 // color, etc...
 typedef struct painter {
-    int             op;
+    int             mode;
     const shape_t   *shape;
     uvec4b_t        color;
     float           smoothness;
@@ -504,7 +512,7 @@ typedef struct block_data block_data_t;
 struct block_data
 {
     int         ref;
-    int         id;
+    uint64_t    id;
     uvec4b_t    voxels[BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE]; // RGBA voxels.
 };
 
@@ -514,7 +522,7 @@ struct block
     UT_hash_handle  hh;     // The hash table of pos -> blocks in a mesh.
     block_data_t    *data;
     vec3_t          pos;
-    int             id;
+    int             id;     // id of the block in the mesh it belongs.
 };
 block_t *block_new(const vec3_t *pos, block_data_t *data);
 void block_delete(block_t *block);
@@ -557,7 +565,7 @@ void mesh_fill(mesh_t *mesh,
                uvec4b_t (*get_color)(const vec3_t *pos, void *user_data),
                void *user_data);
 void mesh_op(mesh_t *mesh, painter_t *painter, const box_t *box);
-void mesh_merge(mesh_t *mesh, const mesh_t *other);
+void mesh_merge(mesh_t *mesh, const mesh_t *other, int op);
 block_t *mesh_add_block(mesh_t *mesh, block_data_t *data, const vec3_t *pos);
 void mesh_move(mesh_t *mesh, const mat4_t *mat);
 uvec4b_t mesh_get_at(const mesh_t *mesh, const vec3_t *pos);
@@ -652,6 +660,8 @@ void render_rect(renderer_t *rend, const plane_t *plane, int strip);
 void render_render(renderer_t *rend, const int rect[4],
                    const vec4_t *clear_color);
 int render_get_default_settings(int i, char **name, render_settings_t *out);
+// Compute the light direction in the model coordinates (toward the light)
+vec3_t render_get_light_dir(const renderer_t *rend);
 
 // #############################
 
@@ -742,10 +752,12 @@ enum {
     KEY_CONTROL     = 341,
 };
 
-// Flags to set where the mouse snap.  This might change in the future.
+// Flags to set where the mouse snap.
 enum {
-    SNAP_MESH  = 1 << 0,
-    SNAP_PLANE = 1 << 1,
+    SNAP_MESH           = 1 << 0,
+    SNAP_PLANE          = 1 << 1,
+    SNAP_SELECTION_IN   = 1 << 2,
+    SNAP_SELECTION_OUT  = 1 << 3,
 };
 
 typedef struct inputs
@@ -866,7 +878,11 @@ typedef struct goxel
     image_t    *image;
 
     mesh_t     *layers_mesh; // All the layers combined.
-    mesh_t     *pick_mesh;
+    mesh_t     *pick_mesh;   // Used for picking (always layers_mesh?)
+
+    // Meshes used by the tools.
+    mesh_t     *tool_mesh_orig;
+    mesh_t     *tool_mesh;
 
     history_t  *history;     // Undo/redo history.
     int        snap;
@@ -924,7 +940,9 @@ typedef struct goxel
 
     int        frame_count;       // Global frames counter.
     int64_t    frame_clock;       // Clock time at beginning of the frame.
-    int        block_next_id;
+
+    // Global uid counter.
+    uint64_t   next_uid;
 
     int        block_count; // Counter for the number of block data.
 } goxel_t;
@@ -939,11 +957,13 @@ void goxel_render_view(goxel_t *goxel, const vec4_t *rect);
 // the view.
 void goxel_mouse_in_view(goxel_t *goxel, const vec2_t *view_size,
                          const inputs_t *inputs, bool inside);
+
 int goxel_unproject(goxel_t *goxel, const vec2_t *view_size,
                     const vec2_t *pos, vec3_t *out, vec3_t *normal);
 bool goxel_unproject_on_mesh(goxel_t *goxel, const vec2_t *view_size,
                      const vec2_t *pos, mesh_t *mesh,
                      vec3_t *out, vec3_t *normal);
+
 bool goxel_unproject_on_plane(goxel_t *goxel, const vec2_t *view_size,
                      const vec2_t *pos, const plane_t *plane,
                      vec3_t *out, vec3_t *normal);

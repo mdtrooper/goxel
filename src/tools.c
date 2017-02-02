@@ -18,6 +18,8 @@
 
 #include "goxel.h"
 
+static const int STATE_MASK = 0x00ff;
+
 enum {
     STATE_IDLE = 0,
     STATE_CANCEL,
@@ -26,9 +28,13 @@ enum {
     STATE_PAINT2,
     STATE_WAIT_UP,
     STATE_WAIT_KEY_UP,
+    STATE_END,
     // For selection tool:
     STATE_SNAPED_FACE,
     STATE_MOVE_FACE,
+
+    // Added to a state the first time we enter into it.
+    STATE_ENTER = 0x0100,
 };
 
 static box_t get_box(const vec3_t *p0, const vec3_t *p1, const vec3_t *n,
@@ -67,16 +73,26 @@ static box_t get_box(const vec3_t *p0, const vec3_t *p1, const vec3_t *n,
     return box;
 }
 
-static bool check_can_skip(goxel_t *goxel, vec3_t pos, bool pressed, int op)
+static bool check_can_skip(goxel_t *goxel, vec3_t pos, bool pressed, int mode)
 {
     if (    pressed == goxel->tool_last_op.pressed &&
-            op == goxel->tool_last_op.op &&
+            mode == goxel->tool_last_op.mode &&
             vec3_equal(pos, goxel->tool_last_op.pos))
         return true;
     goxel->tool_last_op.pressed = pressed;
-    goxel->tool_last_op.op = op;
+    goxel->tool_last_op.mode = mode;
     goxel->tool_last_op.pos = pos;
     return false;
+}
+
+static void set_snap_hint(goxel_t *goxel, int snap)
+{
+    if (snap == SNAP_MESH)
+        goxel_set_hint_text(goxel, "[Snapped to mesh]");
+    if (snap == SNAP_PLANE)
+        goxel_set_hint_text(goxel, "[Snapped to plane]");
+    if (snap == SNAP_SELECTION_IN || snap == SNAP_SELECTION_OUT)
+        goxel_set_hint_text(goxel, "[Snapped to selection]");
 }
 
 static int tool_shape_iter(goxel_t *goxel, const inputs_t *inputs, int state,
@@ -482,12 +498,11 @@ static int tool_procedural_iter(goxel_t *goxel, const inputs_t *inputs,
 
     // XXX: duplicate code with tool_brush_iter.
     if (inside)
-        snaped = goxel_unproject(goxel, view_size, &inputs->mouse_pos,
-                                 &pos, &normal);
+        snaped = goxel_unproject(
+                goxel, view_size, &inputs->mouse_pos,
+                goxel->painter.mode == MODE_ADD && !goxel->snap_offset,
+                &pos, &normal);
     if (snaped) {
-        if (    snaped == SNAP_MESH && goxel->painter.op == OP_ADD &&
-                !goxel->snap_offset)
-            vec3_iadd(&pos, normal);
         if (goxel->tool == TOOL_BRUSH && goxel->snap_offset)
             vec3_iaddk(&pos, normal, goxel->snap_offset * goxel->tool_radius);
         pos.x = round(pos.x - 0.5) + 0.5;
@@ -496,21 +511,27 @@ static int tool_procedural_iter(goxel_t *goxel, const inputs_t *inputs,
         box = bbox_from_extents(pos, 0.5, 0.5, 0.5);
         render_box(&goxel->rend, &box, false, NULL, false);
     }
-    if (state == STATE_IDLE) {
-        if (snaped) state = STATE_SNAPED;
-    }
-    if (state == STATE_SNAPED) {
+
+    switch (state) {
+    case STATE_IDLE:
+        if (snaped) return STATE_SNAPED;
+        break;
+
+    case STATE_SNAPED:
         if (!snaped) return STATE_IDLE;
         if (down) {
             image_history_push(goxel->image);
             proc_stop(proc);
             proc_start(proc, &box);
-            state = STATE_PAINT;
+            return STATE_PAINT;
         }
+        break;
+
+    case STATE_PAINT:
+        if (!down) return STATE_IDLE;
+        break;
     }
-    if (state == STATE_PAINT) {
-        if (!down) state = STATE_IDLE;
-    }
+
     return state;
 }
 
@@ -548,18 +569,13 @@ int tool_iter(goxel_t *goxel, int tool, const inputs_t *inputs, int state,
             goxel->tool_origin_mesh = NULL;
         }
     }
+
     return ret;
 }
 
 void tool_cancel(goxel_t *goxel, int tool, int state)
 {
     if (state == 0) return;
-    if (goxel->tool_origin_mesh) {
-        mesh_set(&goxel->image->active_layer->mesh, goxel->tool_origin_mesh);
-        goxel_update_meshes(goxel, true);
-        mesh_delete(goxel->tool_origin_mesh);
-        goxel->tool_origin_mesh = NULL;
-    }
     goxel->tool_plane = plane_null;
     goxel->tool_state = 0;
 }

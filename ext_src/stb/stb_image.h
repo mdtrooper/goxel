@@ -1,4 +1,4 @@
-/* stb_image - v2.06 - public domain image loader - http://nothings.org/stb_image.h
+/* stb_image - v2.12 - public domain image loader - http://nothings.org/stb_image.h
                                      no warranty implied; use at your own risk
 
    Do this:
@@ -25,12 +25,15 @@
 
       TGA (not sure what subset, if a subset)
       BMP non-1bpp, non-RLE
-      PSD (composited view only, no extra channels)
+      PSD (composited view only, no extra channels, 8/16 bit-per-channel)
 
       GIF (*comp always reports as 4-channel)
       HDR (radiance rgbE format)
       PIC (Softimage PIC)
       PNM (PPM and PGM binary only)
+
+      Animated GIF still needs a proper API, but here's one way to do it:
+          http://gist.github.com/urraka/685d9a6340b26b830d49
 
       - decode from memory or through FILE (define STBI_NO_STDIO to remove code)
       - decode from arbitrary I/O callbacks
@@ -143,6 +146,17 @@
 
 
    Latest revision history:
+      2.12  (2016-04-02) fix typo in 2.11 PSD fix that caused crashes
+      2.11  (2016-04-02) 16-bit PNGS; enable SSE2 in non-gcc x64
+                         RGB-format JPEG; remove white matting in PSD;
+                         allocate large structures on the stack; 
+                         correct channel count for PNG & BMP
+      2.10  (2016-01-22) avoid warning introduced in 2.09
+      2.09  (2016-01-16) 16-bit TGA; comments in PNM files; STBI_REALLOC_SIZED
+      2.08  (2015-09-13) fix to 2.07 cleanup, reading RGB PSD as RGBA
+      2.07  (2015-09-13) partial animated GIF support
+                         limited 16-bit PSD support
+                         minor bugs, code cleanup, and compiler warnings
       2.06  (2015-04-19) fix bug where PSD returns wrong '*comp' value
       2.05  (2015-04-19) fix bug in progressive JPEG handling, fix warning
       2.04  (2015-04-15) try to re-enable SIMD on MinGW 64-bit
@@ -158,10 +172,6 @@
                          STBI_MALLOC,STBI_REALLOC,STBI_FREE
                          STBI_NO_*, STBI_ONLY_*
                          GIF bugfix
-      1.48  (2014-12-14) fix incorrectly-named assert()
-      1.47  (2014-12-14) 1/2/4-bit PNG support (both grayscale and paletted)
-                         optimize PNG
-                         fix bug in interlaced PNG with user-specified channel count
 
    See end of file for full revision history.
 
@@ -1289,13 +1299,17 @@ static stbi__uint32 stbi__get32be(stbi__context *s)
    return (z << 16) + stbi__get16be(s);
 }
 
-#ifndef STBI_ONLY_PNG
+#if defined(STBI_NO_BMP) && defined(STBI_NO_TGA) && defined(STBI_NO_GIF)
+// nothing
+#else
 static int stbi__get16le(stbi__context *s)
 {
    int z = stbi__get8(s);
    return z + (stbi__get8(s) << 8);
 }
+#endif
 
+#ifndef STBI_NO_BMP
 static stbi__uint32 stbi__get32le(stbi__context *s)
 {
    stbi__uint32 z = stbi__get16le(s);
@@ -1491,6 +1505,7 @@ typedef struct
    int            succ_high;
    int            succ_low;
    int            eob_run;
+   int            rgb;
 
    int scan_n, order[4];
    int restart_interval, todo;
@@ -3599,11 +3614,11 @@ stbi_inline static int stbi__zhuffman_decode(stbi__zbuf *a, stbi__zhuffman *z)
 static int stbi__zexpand(stbi__zbuf *z, char *zout, int n)  // need to make room for n bytes
 {
    char *q;
-   int cur, limit;
+   int cur, limit, old_limit;
    z->zout = zout;
    if (!z->z_expandable) return stbi__err("output buffer limit","Corrupt PNG");
    cur   = (int) (z->zout     - z->zout_start);
-   limit = (int) (z->zout_end - z->zout_start);
+   limit = old_limit = (int) (z->zout_end - z->zout_start);
    while (cur + n > limit)
       limit *= 2;
    q = (char *) STBI_REALLOC(z->zout_start, limit);
@@ -6301,6 +6316,26 @@ STBIDEF int stbi_info_from_callbacks(stbi_io_callbacks const *c, void *user, int
 
 /*
    revision history:
+      2.12  (2016-04-02) fix typo in 2.11 PSD fix that caused crashes
+      2.11  (2016-04-02) allocate large structures on the stack
+                         remove white matting for transparent PSD
+                         fix reported channel count for PNG & BMP
+                         re-enable SSE2 in non-gcc 64-bit
+                         support RGB-formatted JPEG
+                         read 16-bit PNGs (only as 8-bit)
+      2.10  (2016-01-22) avoid warning introduced in 2.09 by STBI_REALLOC_SIZED
+      2.09  (2016-01-16) allow comments in PNM files
+                         16-bit-per-pixel TGA (not bit-per-component)
+                         info() for TGA could break due to .hdr handling
+                         info() for BMP to shares code instead of sloppy parse
+                         can use STBI_REALLOC_SIZED if allocator doesn't support realloc
+                         code cleanup
+      2.08  (2015-09-13) fix to 2.07 cleanup, reading RGB PSD as RGBA
+      2.07  (2015-09-13) fix compiler warnings
+                         partial animated GIF support
+                         limited 16-bpc PSD support
+                         #ifdef unused functions
+                         bug with < 92 byte PIC,PNM,HDR,TGA
       2.06  (2015-04-19) fix bug where PSD returns wrong '*comp' value
       2.05  (2015-04-19) fix bug in progressive JPEG handling, fix warning
       2.04  (2015-04-15) try to re-enable SIMD on MinGW 64-bit
