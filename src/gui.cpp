@@ -38,6 +38,8 @@ namespace ImGui {
                              bool display_frame = true,
                              bool default_open = false);
     bool GoxAction(const char *id, const char *label, const arg_t *args);
+    bool GoxInputAngle(const char *id, float *v, int vmin, int vmax);
+    bool GoxTab(const char *label, bool *v);
 };
 
 static texture_t *g_tex_icons = NULL;
@@ -53,9 +55,9 @@ enum {
     ICON_TOOL_SELECTION = 6,
     ICON_TOOL_PROCEDURAL = 7,
 
-    ICON_OP_ADD = 8,
-    ICON_OP_SUB = 9,
-    ICON_OP_PAINT = 10,
+    ICON_MODE_ADD = 8,
+    ICON_MODE_SUB = 9,
+    ICON_MODE_PAINT = 10,
 
     ICON_SHAPE_SPHERE = 16,
     ICON_SHAPE_CUBE = 17,
@@ -345,8 +347,10 @@ void render_view(const ImDrawList* parent_list, const ImDrawCmd* cmd)
     view_t *view = (view_t*)cmd->UserCallbackData;
     const float width = ImGui::GetIO().DisplaySize.x;
     const float height = ImGui::GetIO().DisplaySize.y;
-    int rect[4] = {view->rect.x, height - view->rect.y - view->rect.w,
-                   view->rect.z, view->rect.w};
+    int rect[4] = {(int)view->rect.x,
+                   (int)(height - view->rect.y - view->rect.w),
+                   (int)view->rect.z,
+                   (int)view->rect.w};
     vec4_t back_color;
     back_color = uvec4b_to_vec4(view->goxel->back_color);
 
@@ -355,25 +359,25 @@ void render_view(const ImDrawList* parent_list, const ImDrawCmd* cmd)
     GL(glViewport(0, 0, width, height));
 }
 
-static void op_panel(goxel_t *goxel)
+static void mode_panel(goxel_t *goxel)
 {
     int i;
     bool v;
     struct {
-        int        op;
+        int        mode;
         const char *name;
         int        icon;
     } values[] = {
-        {OP_ADD,    "Add",  ICON_OP_ADD},
-        {OP_SUB,    "Sub",  ICON_OP_SUB},
-        {OP_PAINT,  "Paint", ICON_OP_PAINT},
+        {MODE_ADD,    "Add",  ICON_MODE_ADD},
+        {MODE_SUB,    "Sub",  ICON_MODE_SUB},
+        {MODE_PAINT,  "Paint", ICON_MODE_PAINT},
     };
-    ImGui::Text("Operation");
+    ImGui::Text("Mode");
     for (i = 0; i < (int)ARRAY_SIZE(values); i++) {
-        v = goxel->painter.op == values[i].op;
+        v = goxel->painter.mode == values[i].mode;
         if (ImGui::GoxSelectable(values[i].name, &v,
                                  g_tex_icons->tex, values[i].icon)) {
-            goxel->painter.op = values[i].op;
+            goxel->painter.mode = values[i].mode;
         }
         if (i != 2)
             ImGui::SameLine();
@@ -386,7 +390,12 @@ static void tool_options_panel(goxel_t *goxel)
     int i;
     float v;
     bool s;
-    const char *snap[] = {"Mesh", "Plane"};
+    const char *snap[][2] = {
+        {"Mesh", "M"},
+        {"Plane", "P"},
+        {"Selection Inside", "SI"},
+        {"Selection Outside", "SO"},
+    };
     ImVec4 color;
     layer_t *layer;
     mat4_t mat;
@@ -410,12 +419,13 @@ static void tool_options_panel(goxel_t *goxel)
     }
     if (IS_IN(goxel->tool, TOOL_BRUSH, TOOL_SHAPE)) {
         ImGui::Text("Snap on");
-        for (i = 0; i < 2; i++) {
+        for (i = 0; i < (int)ARRAY_SIZE(snap); i++) {
             s = goxel->snap & (1 << i);
-            if (ImGui::GoxSelectable(snap[i], &s, 0, 0)) {
-                goxel->snap = s ? goxel->snap | (1 << i) : goxel->snap & ~(1 << i);
+            if (ImGui::GoxSelectable(snap[i][1], &s, 0, 0, snap[i][0])) {
+                goxel->snap = s ? goxel->snap | (1 << i) :
+                                  goxel->snap & ~(1 << i);
             }
-            if (i != 1)
+            if (i != ARRAY_SIZE(snap) - 1)
                 ImGui::SameLine();
         }
     }

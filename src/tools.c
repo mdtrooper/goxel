@@ -206,7 +206,8 @@ static int tool_selection_iter(goxel_t *goxel, const inputs_t *inputs,
             IS_IN(state, STATE_IDLE, STATE_SNAPED, STATE_SNAPED_FACE)) {
         goxel->tool_snape_face = -1;
         if (goxel_unproject_on_box(goxel, view_size, &inputs->mouse_pos,
-                               &goxel->selection, &pos, &normal, &face)) {
+                               &goxel->selection, false,
+                               &pos, &normal, &face)) {
             goxel->tool_snape_face = face;
             state = STATE_SNAPED_FACE;
         }
@@ -216,7 +217,7 @@ static int tool_selection_iter(goxel_t *goxel, const inputs_t *inputs,
                                   FACES_MATS[goxel->tool_snape_face]);
 
     if (inside && face == -1)
-        snaped = goxel_unproject(goxel, view_size, &inputs->mouse_pos,
+        snaped = goxel_unproject(goxel, view_size, &inputs->mouse_pos, false,
                                  &pos, &normal);
     if (snaped) {
         pos.x = round(pos.x - 0.5) + 0.5;
@@ -406,8 +407,10 @@ static int tool_laser_iter(goxel_t *goxel, const inputs_t *inputs, int state,
     vec2_t win = inputs->mouse_pos;
     win.y = view_size->y - win.y;
 
-    painter.op = OP_SUB;
+    painter.mode = MODE_SUB_CLAMP;
     painter.shape = &shape_cylinder;
+    painter.color = uvec4b(255, 255, 255, 255);
+
     // Create the tool box from the camera along the visible ray.
     camera_get_ray(&goxel->camera, &win, &view, &pos, &normal);
     box.mat = mat4_identity;
@@ -423,18 +426,19 @@ static int tool_laser_iter(goxel_t *goxel, const inputs_t *inputs, int state,
     mat4_itranslate(&box.mat, 0, 0, -1024);
     mat4_iscale(&box.mat, goxel->tool_radius, goxel->tool_radius, 1024);
     render_box(&goxel->rend, &box, false, NULL, false);
-    if (state == STATE_IDLE) {
-        if (down) {
-            state = STATE_PAINT;
-            image_history_push(goxel->image);
-        }
-    }
-    if (state == STATE_PAINT) {
-        if (!down) {
-            return STATE_IDLE;
-        }
+
+    switch (state) {
+    case STATE_IDLE:
+        if (down) return STATE_PAINT;
+        break;
+    case STATE_PAINT | STATE_ENTER:
+        image_history_push(goxel->image);
+        break;
+    case STATE_PAINT:
+        if (!down) return STATE_IDLE;
         mesh_op(mesh, &painter, &box);
-        goxel_update_meshes(goxel, false);
+        goxel_update_meshes(goxel, -1);
+        break;
     }
     return state;
 }

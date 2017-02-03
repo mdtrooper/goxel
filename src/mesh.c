@@ -253,9 +253,11 @@ void mesh_merge(mesh_t *mesh, const mesh_t *other, int mode)
     mesh_prepare_write(mesh);
 
     // Add empty blocks if needed.
-    MESH_ITER_BLOCKS(other, block) {
-        if (!mesh_get_block_at(mesh, &block->pos)) {
-            mesh_add_block(mesh, NULL, &block->pos);
+    if (IS_IN(mode, MODE_ADD, MODE_MAX)) {
+        MESH_ITER_BLOCKS(other, block) {
+            if (!mesh_get_block_at(mesh, &block->pos)) {
+                mesh_add_block(mesh, NULL, &block->pos);
+            }
         }
     }
 
@@ -267,7 +269,7 @@ void mesh_merge(mesh_t *mesh, const mesh_t *other, int mode)
             block_delete(block);
             continue;
         }
-        block_merge(block, other_block);
+        block_merge(block, other_block, mode);
     }
 }
 
