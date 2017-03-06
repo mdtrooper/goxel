@@ -435,7 +435,7 @@ static void tool_options_panel(goxel_t *goxel)
             goxel->snap_offset = clamp(v, -1, +1);
     }
     if (IS_IN(goxel->tool, TOOL_BRUSH, TOOL_SHAPE)) {
-        op_panel(goxel);
+        mode_panel(goxel);
         shapes_panel(goxel);
     }
     if (IS_IN(goxel->tool, TOOL_BRUSH, TOOL_SHAPE, TOOL_PICK_COLOR)) {
@@ -493,7 +493,7 @@ static void tool_options_panel(goxel_t *goxel)
             image_history_push(goxel->image);
             mesh_move(layer->mesh, &mat);
             layer->mat = mat4_mul(mat, layer->mat);
-            goxel_update_meshes(goxel, true);
+            goxel_update_meshes(goxel, -1);
         }
     }
     if (goxel->tool == TOOL_SELECTION) {
@@ -664,7 +664,7 @@ static void procedural_panel(goxel_t *goxel)
     if (proc->state == PROC_RUNNING) {
         proc_iter(proc);
         if (!proc->in_frame)
-            goxel_update_meshes(goxel, false);
+            goxel_update_meshes(goxel, MESH_LAYERS);
     }
 }
 
@@ -739,7 +739,7 @@ static void layers_panel(goxel_t *goxel)
                               ImVec2(12, 12))) {
             if (current) {
                 goxel->image->active_layer = layer;
-                goxel_update_meshes(goxel, true);
+                goxel_update_meshes(goxel, -1);
             }
         }
         ImGui::SameLine();
@@ -747,7 +747,7 @@ static void layers_panel(goxel_t *goxel)
                     &layer->visible, 0, ImVec2(12, 12))) {
             if (ImGui::IsKeyDown(KEY_SHIFT))
                 toggle_layer_only_visible(goxel, layer);
-            goxel_update_meshes(goxel, true);
+            goxel_update_meshes(goxel, -1);
         }
         ImGui::SameLine();
         ImGui::InputText("##name", layer->name, sizeof(layer->name));
@@ -816,15 +816,9 @@ static void render_advanced_panel(goxel_t *goxel)
     ImGui::PushID("RenderAdvancedPanel");
 
     ImGui::Text("Light");
-    i = round(goxel->rend.light.pitch * DR2D);
-    ImGui::InputInt("Pitch", &i);
-    goxel->rend.light.pitch = clamp(i, -90, +90) * DD2R;
-    i = round(goxel->rend.light.yaw * DR2D);
-    ImGui::InputInt("Yaw", &i);
-    while (i < 0) i += 360;
-    goxel->rend.light.yaw = (i % 360) * DD2R;
+    ImGui::GoxInputAngle("Pitch", &goxel->rend.light.pitch, -90, +90);
+    ImGui::GoxInputAngle("Yaw", &goxel->rend.light.yaw, 0, 360);
     ImGui::Checkbox("Fixed", &goxel->rend.light.fixed);
-
 
     v = goxel->rend.settings.border_shadow;
     if (ImGui::InputFloat("bshadow", &v, 0.1)) {
@@ -841,7 +835,7 @@ static void render_advanced_panel(goxel_t *goxel)
     MAT_FLOAT(ambient, 0, 1);
     MAT_FLOAT(diffuse, 0, 1);
     MAT_FLOAT(specular, 0, 1);
-    MAT_FLOAT(shininess, 0.1, 4);
+    MAT_FLOAT(shininess, 0.1, 10);
     MAT_FLOAT(smoothness, 0, 1);
 
 #undef MAT_FLOAT
@@ -1068,12 +1062,12 @@ static void render_profiler_info(void)
 
     root = profiler_get_blocks();
     if (!root) return;
-    time_per_frame = root->tot_time / root->count / (1000.0 * 1000.0);
+    time_per_frame = root->avg.tot_time / (1000.0 * 1000.0);
     fps = 1000.0 / time_per_frame;
     ImGui::BulletText("%.1fms/frame (%dfps)", time_per_frame, fps);
     for (block = root; block; block = block->next) {
-        self_time = block->self_time / root->count / (1000.0 * 1000.0);
-        percent = block->self_time * 100 / root->tot_time;
+        self_time = block->avg.self_time / (1000.0 * 1000.0);
+        percent = block->avg.self_time * 100 / root->avg.tot_time;
         if (!percent) continue;
         ImGui::BulletText("%s: self:%.1fms/frame (%d%%)",
                 block->name, self_time, percent);
@@ -1089,9 +1083,9 @@ static void shift_alpha_popup(goxel_t *goxel, bool just_open)
     if (just_open)
         original_mesh = mesh_copy(mesh);
     if (ImGui::InputInt("shift", &v, 1)) {
-        mesh_set(&mesh, original_mesh);
+        mesh_set(mesh, original_mesh);
         mesh_shift_alpha(mesh, v);
-        goxel_update_meshes(goxel, true);
+        goxel_update_meshes(goxel, -1);
     }
     if (ImGui::Button("OK")) {
         mesh_delete(original_mesh);
@@ -1166,6 +1160,7 @@ void gui_iter(goxel_t *goxel, const inputs_t *inputs)
                 if (ImGui::MenuItem("ply")) export_as(goxel, "ply\0*.ply\0");
                 if (ImGui::MenuItem("qubicle")) export_as(goxel, "qubicle\0*.qb\0");
                 if (ImGui::MenuItem("vox")) export_as(goxel, "vox\0*.vox\0");
+                if (ImGui::MenuItem("pov")) export_as(goxel, "pov\0*.pov\0");
                 if (ImGui::MenuItem("txt")) export_as(goxel, "txt\0*.txt\0");
                 ImGui::EndMenu();
             }
@@ -1194,31 +1189,34 @@ void gui_iter(goxel_t *goxel, const inputs_t *inputs)
 
     const struct {
         const char *name;
-        const char *tooltip;
         void (*fn)(goxel_t *goxel);
     } PANELS[] = {
-        {"T", "Tools", tools_panel},
-        {"P", "Palette", palette_panel},
-        {"L", "layers", layers_panel},
-        {"R", "Render", render_panel},
-        {"E", "Export", export_panel},
+        {"Tools", tools_panel},
+        {"Palette", palette_panel},
+        {"layers", layers_panel},
+        {"Render", render_panel},
+        {"Export", export_panel},
     };
 
-    goxel->show_export_viewport = false;
+    ImGui::BeginGroup();
     for (i = 0; i < (int)ARRAY_SIZE(PANELS); i++) {
         bool b = (current_panel == (int)i);
-        if (i) ImGui::SameLine();
-        if (ImGui::GoxSelectable(PANELS[i].name, &b, 0, 0,
-                                 PANELS[i].tooltip))
+        if (ImGui::GoxTab(PANELS[i].name, &b))
             current_panel = i;
     }
+    ImGui::EndGroup();
+    ImGui::SameLine();
+    ImGui::BeginGroup();
 
-    ImGui::Text("%s", PANELS[current_panel].tooltip);
+    goxel->show_export_viewport = false;
+
     ImGui::PushID("panel");
     PANELS[current_panel].fn(goxel);
     ImGui::PopID();
 
+    ImGui::EndGroup();
     ImGui::EndChild();
+
     ImGui::SameLine();
 
     ImGui::BeginChild("3d view", ImVec2(0, 0), false,
@@ -1246,7 +1244,10 @@ void gui_iter(goxel_t *goxel, const inputs_t *inputs)
 
     // Apparently there is a bug if we do not render anything.  So I render
     // a '.' if there is nothing.  This is a hack.
-    ImGui::Text("%s", goxel->help_text ?: ".");
+    ImGui::Text("%s", goxel->hint_text ?: ".");
+    ImGui::SameLine(180);
+    ImGui::Text("%s", goxel->help_text ?: "");
+
     ImGui::EndChild();
 
     if (DEBUG || PROFILER) {
@@ -1255,7 +1256,7 @@ void gui_iter(goxel_t *goxel, const inputs_t *inputs)
                           ImGuiWindowFlags_NoInputs);
         ImGui::Text("Blocks: %d (%.2g MiB)", goxel->block_count,
                 (float)goxel->block_count * sizeof(block_data_t) / MiB);
-        ImGui::Text("Blocks id: %d", goxel->block_next_id);
+        ImGui::Text("uid: %ld", goxel->next_uid);
         if (PROFILER)
             render_profiler_info();
         ImGui::EndChild();
@@ -1276,12 +1277,12 @@ void gui_iter(goxel_t *goxel, const inputs_t *inputs)
         goxel->plane_hidden = !goxel->plane_hidden;
     if (ImGui::IsKeyPressed(KEY_DELETE, false))
         action_exec2("layer_clear");
-    if (ImGui::IsKeyPressed(' ', false) && goxel->painter.op == OP_ADD)
-        goxel->painter.op = OP_SUB;
-    if (ImGui::IsKeyReleased(' ') && goxel->painter.op == OP_SUB)
-        goxel->painter.op = OP_ADD;
-    if (ImGui::IsKeyReleased(' ') && goxel->painter.op == OP_SUB)
-        goxel->painter.op = OP_ADD;
+    if (ImGui::IsKeyPressed(' ', false) && goxel->painter.mode == MODE_ADD)
+        goxel->painter.mode = MODE_SUB;
+    if (ImGui::IsKeyReleased(' ') && goxel->painter.mode == MODE_SUB)
+        goxel->painter.mode = MODE_ADD;
+    if (ImGui::IsKeyReleased(' ') && goxel->painter.mode == MODE_SUB)
+        goxel->painter.mode = MODE_ADD;
     if (ImGui::IsKeyPressed(KEY_CONTROL, false) && goxel->tool == TOOL_BRUSH) {
         tool_cancel(goxel, goxel->tool, goxel->tool_state);
         goxel->prev_tool = goxel->tool;
