@@ -535,7 +535,7 @@ int block_generate_vertices(const block_data_t *data, int effects,
                             voxel_vertex_t *out);
 void block_op(block_t *block, painter_t *painter, const box_t *box);
 bool block_is_empty(const block_t *block, bool fast);
-void block_merge(block_t *block, const block_t *other);
+void block_merge(block_t *block, const block_t *other, int op);
 uvec4b_t block_get_at(const block_t *block, const vec3_t *pos);
 void block_set_at(block_t *block, const vec3_t *pos, uvec4b_t v);
 
@@ -554,12 +554,13 @@ struct mesh
     block_t *blocks;
     int next_block_id;
     int *ref;   // Used to implement copy on write of the blocks.
+    uint64_t id;     // global uniq id, change each time a mesh changes.
 };
 mesh_t *mesh_new(void);
 void mesh_clear(mesh_t *mesh);
 void mesh_delete(mesh_t *mesh);
 mesh_t *mesh_copy(const mesh_t *mesh);
-void mesh_set(mesh_t **mesh, const mesh_t *other);
+void mesh_set(mesh_t *mesh, const mesh_t *other);
 box_t mesh_get_box(const mesh_t *mesh, bool exact);
 void mesh_fill(mesh_t *mesh,
                uvec4b_t (*get_color)(const vec3_t *pos, void *user_data),
@@ -834,6 +835,7 @@ typedef struct proc {
 } gox_proc_t;
 
 int proc_parse(const char *txt, gox_proc_t *proc);
+void proc_release(gox_proc_t *proc);
 int proc_start(gox_proc_t *proc, const box_t *box);
 int proc_stop(gox_proc_t *proc);
 int proc_iter(gox_proc_t *proc);
@@ -909,14 +911,12 @@ typedef struct goxel
     // Some state for the tool iter functions.
     // XXX: move this into tool.c
     int        tool_state;
-    int        tool_t;
     int        tool_snape_face;
-    mesh_t     *tool_origin_mesh;
     // Structure used to skip rendering when don't move the mouse.
     struct     {
         vec3_t     pos;
         bool       pressed;
-        int        op;
+        int        mode;
     }          tool_last_op;
     vec3_t     tool_start_pos;
     plane_t    tool_plane;
@@ -937,6 +937,7 @@ typedef struct goxel
     palette_t  *palettes;   // The list of all the palettes
     palette_t  *palette;    // The current color palette
     char       *help_text;  // Seen in the bottom of the screen.
+    char       *hint_text;  // Seen in the bottom of the screen.
 
     int        frame_count;       // Global frames counter.
     int64_t    frame_clock;       // Clock time at beginning of the frame.
@@ -959,7 +960,9 @@ void goxel_mouse_in_view(goxel_t *goxel, const vec2_t *view_size,
                          const inputs_t *inputs, bool inside);
 
 int goxel_unproject(goxel_t *goxel, const vec2_t *view_size,
-                    const vec2_t *pos, vec3_t *out, vec3_t *normal);
+                    const vec2_t *pos, bool on_surface,
+                    vec3_t *out, vec3_t *normal);
+
 bool goxel_unproject_on_mesh(goxel_t *goxel, const vec2_t *view_size,
                      const vec2_t *pos, mesh_t *mesh,
                      vec3_t *out, vec3_t *normal);
@@ -968,11 +971,13 @@ bool goxel_unproject_on_plane(goxel_t *goxel, const vec2_t *view_size,
                      const vec2_t *pos, const plane_t *plane,
                      vec3_t *out, vec3_t *normal);
 bool goxel_unproject_on_box(goxel_t *goxel, const vec2_t *view_size,
-                     const vec2_t *pos, const box_t *box,
+                     const vec2_t *pos, const box_t *box, bool inside,
                      vec3_t *out, vec3_t *normal, int *face);
-void goxel_update_meshes(goxel_t *goxel, bool pick);
+// Recompute the meshes.  mask from MESH_ enum.
+void goxel_update_meshes(goxel_t *goxel, int mask);
 
 void goxel_set_help_text(goxel_t *goxel, const char *msg, ...);
+void goxel_set_hint_text(goxel_t *goxel, const char *msg, ...);
 
 // XXX: use actions for all that!
 void goxel_undo(goxel_t *goxel);
@@ -1050,6 +1055,14 @@ struct profiler_block
     int64_t             tot_time;
     int64_t             self_time;
     int64_t             enter_time;
+
+    // For real time fps computation.
+    struct {
+        int64_t             frame_tot_time;
+        int64_t             frame_self_time;
+        int64_t             tot_time;
+        int64_t             self_time;
+    } avg;
 };
 void profiler_start(void);
 void profiler_stop(void);
@@ -1089,5 +1102,21 @@ const void *assets_get(const char *url, int *size);
 // If f returns not 0, the asset is skipped.
 int assets_list(const char *url, void *user,
                 int (*f)(int i, const char *path, void *user));
+
+// Basic mustache templates support
+// Check povray.c for an example of usage.
+
+typedef struct mustache mustache_t;
+mustache_t *mustache_root(void);
+mustache_t *mustache_add_dict(mustache_t *m, const char *key);
+mustache_t *mustache_add_list(mustache_t *m, const char *key);
+void mustache_add_str(mustache_t *m, const char *key, const char *fmt, ...);
+int mustache_render(const mustache_t *m, const char *templ, char *out);
+void mustache_free(mustache_t *m);
+
+// ####### Cache manager #########################
+// Allow to cache blocks merge operations.
+void cache_add(const void *key, int len, block_data_t *data);
+block_data_t *cache_get(const void *key, int len);
 
 #endif // GOXEL_H
