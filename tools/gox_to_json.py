@@ -8,6 +8,7 @@ __copyright__ = "Copyright 2018"
 __license__ = "GPL"
 
 from sys import argv
+from os import stat
 from os.path import isfile
 
 def help():
@@ -37,16 +38,30 @@ def main():
         exit(1)
 
 def gox_to_json(filename):
+    file_dict = {}
+    
     try:
-        with open(filename, 'rb') as f:
-            magic_string = f.read(4).decode()
+        file_dict['size'] = stat(filename).st_size
             
-            if magic_string.decode() != 'GOX ':
+        with open(filename, 'rb') as f:
+            file_dict['magic_string'] = f.read(4).decode()
+            
+            if file_dict['magic_string'] != 'GOX ':
                 print('ERROR: The file is not a gox file.')
                 exit(1)
             
-            version = f.read(4)[0]
+            file_dict['version'] = f.read(4)[0]
             
+            # READ CHUNKS
+            reverse_count = file_dict['size'] - 4 -4 # size - magic_string (4bytes) - version (4bytes)
+            
+            file_dict['chunks'] = []
+            while reverse_count > 0:
+                chunk = {}
+                chunk['length'] = f.read(4).decode()
+                chunk['type'] = f.read(4).decode()
+                
+                file_dict['chunks'].append(chunk)
             
             #~ for b in iter(lambda: f.read(1), b''):
                 #~ print(b, end='')
