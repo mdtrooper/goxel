@@ -16,6 +16,8 @@
  * goxel.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// File: goxel.h
+
 #ifndef GOXEL_H
 #define GOXEL_H
 
@@ -31,8 +33,9 @@
 #include "utlist.h"
 #include "uthash.h"
 #include "utarray.h"
-#include "ivec.h"
 #include "noc_file_dialog.h"
+#include "block_def.h"
+#include "mesh.h"
 #include <float.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -40,7 +43,8 @@
 #include <string.h>
 #include <stdarg.h>
 
-#define GOXEL_VERSION_STR "0.5.0"
+#define GOXEL_VERSION_STR "0.7.3"
+#define GOXEL_DEFAULT_THEME "original"
 
 // #### Set the DEBUG macro ####
 #ifndef DEBUG
@@ -50,6 +54,11 @@
 #       define DEBUG 0
 #   endif
 #endif
+
+#if !DEBUG && !defined(NDEBUG)
+#   define NDEBUG
+#endif
+#include <assert.h>
 // #############################
 
 
@@ -149,7 +158,7 @@ enum {
 #if DEBUG
 #  define GL(line) ({                                                   \
        line;                                                            \
-       if (check_gl_errors(__FILE__, __LINE__)) assert(false);          \
+       if (gl_check_errors(__FILE__, __LINE__)) assert(false);          \
    })
 #else
 #  define GL(line) line
@@ -158,103 +167,191 @@ enum {
 
 
 
-// ### Some useful inline functions / macros.
 
+// ####### Section: Utils ################################################
+
+// Some useful inline functions / macros
+
+/*
+ * Macro: ARRAY_SIZE
+ * Return the number of elements in an array
+ */
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-#define SWAP(x0, x) {typeof(x0) tmp = x0; x0 = x; x = tmp;}
 
-// IS_IN(x, ...): returns true if x is equal to any of the other arguments.
-#define IS_IN(x, ...) ({ \
-        bool _ret = false; \
-        const typeof(x) _V[] = {__VA_ARGS__}; \
-        int _i; \
-        for (_i = 0; _i < (int)ARRAY_SIZE(_V); _i++) \
-            if (x == _V[_i]) _ret = true; \
-        _ret; \
-    })
+/*
+ * Macro: SWAP
+ * Swap two variables
+ */
+#define SWAP(x0, x) do {typeof(x0) tmp = x0; x0 = x; x = tmp;} while (0)
 
-static inline uvec4b_t HEXCOLOR(uint32_t v)
-{
-    return uvec4b((v >> 24) & 0xff,
-                  (v >> 16) & 0xff,
-                  (v >>  8) & 0xff,
-                  (v >>  0) & 0xff);
-}
+/*
+ * Macro: USER_PASS
+ * Used to pass values to callback 'void *user' arguments.
+ *
+ * For a function with the following declaration: f(void *user), we can pass
+ * several arguments packed in an array like that:
+ *
+ * int x, y;
+ * f(USER_PASS(&x, &y));
+ */
+#define USER_PASS(...) ((const void*[]){__VA_ARGS__})
 
-static inline vec4_t uvec4b_to_vec4(uvec4b_t v)
-{
-    return vec4(v.x / 255., v.y / 255., v.z / 255., v.w / 255.);
-}
+/*
+ * Macro: USER_GET
+ * Used to unpack values passed to a callback with USER_PASS:
+ *
+ * void f(void *user)
+ * {
+ *     char *arg1 = USER_GET(user, 0);
+ *     int   arg2 = *((int*)USER_GET(user, 1));
+ * }
+ */
+#define USER_GET(var, n) (((void**)var)[n])
+
+/*
+ * Macro: vec3_set
+ * Set a 3 sized array values.
+ */
+#define vec3_set(v, x, y, z) do { \
+    (v)[0] = (x); (v)[1] = (y); (v)[2] = (z); } while(0)
+
+/*
+ * Macro: vec4_set
+ * Set a 4 sized array values.
+ */
+#define vec4_set(v, x, y, z, w) do { \
+    (v)[0] = (x); (v)[1] = (y); (v)[2] = (z); (v)[3] = (w); } while(0)
+
+/*
+ * Macro: vec4_copy
+ * Copy a 4 sized array into an other one.
+ */
+#define vec4_copy(a, b) do { \
+        (b)[0] = (a)[0]; (b)[1] = (a)[1]; (b)[2] = (a)[2]; (b)[3] = (a)[3]; \
+    } while (0)
+
+/*
+ * Macro: vec4_equal
+ * Test whether two 4 sized vectors are equal.
+ */
+#define vec4_equal(a, b) ({ \
+        (a)[0] == (b)[0] && \
+        (a)[1] == (b)[1] && \
+        (a)[2] == (b)[2] && \
+        (a)[3] == (b)[3]; })
 
 // Convertion between radian and degree.
 #define DR2D (180 / M_PI)
 #define DD2R (M_PI / 180)
 
+#define KB 1024
+#define MB (1024 * KB)
+#define GB (1024 * MB)
+
+/*
+ * Macro: min
+ * Safe min function.
+ */
 #define min(a, b) ({ \
       __typeof__ (a) _a = (a); \
       __typeof__ (b) _b = (b); \
       _a < _b ? _a : _b; \
       })
 
+/*
+ * Macro: max
+ * Safe max function.
+ */
 #define max(a, b) ({ \
       __typeof__ (a) _a = (a); \
       __typeof__ (b) _b = (b); \
       _a > _b ? _a : _b; \
       })
 
+/*
+ * Macro: max3
+ * Safe max function, return the max of three values.
+ */
 #define max3(x, y, z) (max((x), max((y), (z))))
+
+/*
+ * Macro: min3
+ * Safe max function, return the max of three values.
+ */
 #define min3(x, y, z) (min((x), min((y), (z))))
 
+/*
+ * Macro: clamp
+ * Clamp a value.
+ */
 #define clamp(x, a, b) (min(max(x, a), b))
 
-#define sign(x) ({ \
-      __typeof__ (x) _x = (x); \
-      (_x > 0) ? +1 : (_x < 0)? -1 : 0; \
-      })
+/*
+ * Macro: cmp
+ * Compare two values.
+ *
+ * Return:
+ *   +1 if a > b, -1 if a < b, 0 if a == b.
+ */
+#define cmp(a, b) ({ \
+    __typeof__ (a) _a = (a); \
+    __typeof__ (b) _b = (b); \
+    (_a > _b) ? +1 : (_a < _b) ? -1 : 0; \
+})
 
+/* Function: smoothstep
+ * Perform Hermite interpolation between two values.
+ *
+ * This is similar to the smoothstep function in OpenGL shader language.
+ *
+ * Parameters:
+ *   edge0 - Lower edge of the Hermite function.
+ *   edge1 - Upper edge of the Hermite function.
+ *   x     - Source value for interpolation.
+ */
 static inline float smoothstep(float edge0, float edge1, float x)
 {
     x = clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
     return x * x * (3.0f - 2.0f * x);
 }
 
+/*
+ * Function: mix
+ * Linear blend of x and y.
+ *
+ * Similar to GLES mix function.
+ */
 static inline float mix(float x, float y, float t)
 {
     return (1.0 - t) * x + t * y;
 }
 
-// #############################
+/* Function: set_flag
+ * Set some int bits to 0 or 1.
+ *
+ * Parameters:
+ *   x    - The int value to change.
+ *   flag - Bitmask of the bits we want to set.
+ *   v    - Value to set.
+ */
+static inline void set_flag(int *x, int flag, bool v)
+{
+    v ? (*x |= flag) : (*x &= ~flag);
+}
 
-// XXX: I should clean up a but the code of vec.h so that I can put those on
-// top.
-#include "box.h"
-#include "plane.h"
-
-
-// #### Utils ##################
-
-// Get the clock in nanoseconds
-int64_t get_clock(void);
+/*
+ * Function: read_file
+ * Read a file from disk.
+ *
+ * Return:
+ *   A newly allocated buffer containing the file data.
+ */
+char *read_file(const char *path, int *size);
 
 // Used internally by the LOG macro
 void dolog(int level, const char *msg,
            const char *func, const char *file, int line, ...);
-int check_gl_errors(const char *file, int line);
 
-// Enum of all the gl extensions we care for.
-enum {
-    GOX_GL_QCOM_tiled_rendering,
-    GOX_GL_OES_packed_depth_stencil,
-    GOX_GL_EXT_discard_framebuffer,
-
-    GOX_GL_EXTENSIONS_COUNT
-};
-bool _has_gl_extension(int extension);
-#define has_gl_extension(x) (_has_gl_extension(GOX_##x))
-
-int create_program(const char *vertex_shader, const char *fragment_shader,
-                   const char *include);
-void delete_program(int prog);
 uint8_t *img_read(const char *path, int *width, int *height, int *bpp);
 uint8_t *img_read_from_mem(const char *data, int size,
                            int *w, int *h, int *bpp);
@@ -263,31 +360,211 @@ uint8_t *img_write_to_mem(const uint8_t *img, int w, int h, int bpp,
                           int *size);
 void img_downsample(const uint8_t *img, int w, int h, int bpp,
                     uint8_t *out);
-bool str_endswith(const char *str, const char *end);
-bool str_startswith(const char *s1, const char *s2);
+/*
+ * Function: unix_to_dtf
+ * Get gregorian date from unix time.
+ *
+ * Parameters:
+ *   t  - Unix time.
+ *   iy - Output year.
+ *   im - Output month (1 - 12).
+ *   id - Output day (1 - 31).
+ *   h  - Output hour.
+ *   m  - Output minute.
+ *   s  - Output seconds.
+ */
+int unix_to_dtf(double t, int *iy, int *im, int *id, int *h, int *m, int *s);
 
+/*
+ * Function: utf_16_to_8
+ * Convert a string encoded in utf_16 to utf_8.
+ *
+ * Parameters:
+ *   in16   - Input string in utf 16 encoding.
+ *   out8   - Output buffer that receive the utf8 string.
+ *   size8  - Size of the output buffer.
+ */
+int utf_16_to_8(const wchar_t *in16, char *out8, size_t size8);
+
+/*
+ * Function: str_equ
+ * Return whether two strings are equal.
+ */
 static inline bool str_equ(const char *s1, const char *s2) {
     return strcmp(s1, s2) == 0;
 }
 
-// List all the files in a directory.
-// flags: unused for the moment.
-// Return the number of directory found.
-int list_dir(const char *url, int flags, void *user,
-             int (*f)(int i, const char *path, void *user));
+/*
+ * Function: str_endswith
+ * Return whether a string ends with an other one.
+ */
+bool str_endswith(const char *str, const char *end);
+
+/*
+ * Function: str_startswith
+ * Return whether a string starts with an other one.
+ */
+bool str_startswith(const char *s1, const char *s2);
+
+
+/*
+ * Function: unproject
+ * Convert from screen coordinate to world coordinates.
+ *
+ * Similar to gluUnproject.
+ *
+ * Parameters:
+ *   win        - Windows coordinates to be mapped.
+ *   model      - Modelview matrix.
+ *   proj       - Projection matrix.
+ *   viewport   - Viewport rect (x, y, w, h).
+ *   out        - Output of the computed object coordinates.
+ */
+void unproject(const float win[3], const float model[4][4],
+               const float proj[4][4], const float viewport[4],
+               float out[3]);
+
+/*
+ * Function: b64_decode
+ * Decode a base64 string
+ *
+ * Parameters:
+ *   src  - A base 64 encoded string.
+ *   dest - Buffer that will receive the decoded value or NULL.  If set to
+ *          NULL the function just returns the size of the decoded data.
+ *
+ * Return:
+ *   The size of the decoded data.
+ */
+int b64_decode(const char *src, void *dest);
+
+/*
+ * Function: crc64
+ * Compute crc64 hash
+ *
+ * Parameters:
+ *   crc    - Initial crc value.
+ *   s      - Data pointer.
+ *   len    - Data size.
+ *
+ * Return:
+ *   The new crc64 value.
+ */
+uint64_t crc64(uint64_t crc, const uint8_t *s, uint64_t len);
 
 // #############################
 
+// XXX: I should clean up a but the code of vec.h so that I can put those on
+// top.
+#include "box.h"
+#include "plane.h"
 
+// ######### Section: GL utils ############################
 
-// #### System #################
+/* Enum of all the gl extensions we care for. */
+enum {
+    GOX_GL_QCOM_tiled_rendering,
+    GOX_GL_OES_packed_depth_stencil,
+    GOX_GL_OES_depth_texture,
+    GOX_GL_EXT_discard_framebuffer,
+
+    GOX_GL_EXTENSIONS_COUNT
+};
+
+int gl_check_errors(const char *file, int line);
+
+/*
+ * Function: gl_has_extension
+ * Check whether an OpenGL extension is available.
+ */
+bool _gl_has_extension(int extension);
+#define gl_has_extension(x) (_gl_has_extension(GOX_##x))
+
+/*
+ * Function: gl_create_prog
+ * Helper function to create an OpenGL program.
+ */
+int gl_create_prog(const char *vertex_shader, const char *fragment_shader,
+                   const char *include);
+
+/*
+ * Function: gl_create_prog
+ * Helper function to delete an OpenGL program.
+ */
+void gl_delete_prog(int prog);
+
+/*
+ * Function: gl_gen_fbo
+ * Helper function to generate an OpenGL framebuffer object with an
+ * associated texture.
+ *
+ * Parameters:
+ *   w          - Width of the fbo.
+ *   h          - Height of the fbo.
+ *   format     - GL_RGBA or GL_DEPTH_COMPONENT.
+ *   out_fbo    - The created fbo.
+ *   out_tex    - The created texture.
+ */
+int gl_gen_fbo(int w, int h, GLenum format, int msaa,
+               GLuint *out_fbo, GLuint *out_tex);
+
+/* ########################################################################
+ * Section: System
+ * Some system related functions.  All the things that might depend on the
+ * operating system, not relying on libc, should go there.
+ */
+
+/*
+ * Function: sys_log
+ * Write a log message to output.
+ *
+ * Note: this should never be called directly, use the LOG_ macros instead.
+ */
 void sys_log(const char *msg);
-const char *sys_get_data_dir(void);
-bool sys_asset_exists(const char *path);
-char *sys_read_asset(const char *path, int *size);
+
+/*
+ * Function: sys_list_dir
+ * List all the files in a directory.
+ *
+ * Parameters:
+ *   dir      - Path of the directory we want to list.
+ *   callback - Function called once per entry.
+ *   user     - User data passed to the callback.
+ *
+ * Return:
+ *   The number of files found.
+ */
+int sys_list_dir(const char *dir,
+                 int (*callback)(const char *dir, const char *name,
+                                 void *user),
+                 void *user);
+
+/*
+ * Function: sys_get_user_dir
+ * Return the user config directory for goxel
+ *
+ * On linux, this should be $HOME/.config/goxel.
+ */
+const char *sys_get_user_dir(void);
+
+/*
+ * Function: sys_make_dir
+ * Create all the directories parent of a given file path if they do not
+ * exist yet.
+ *
+ * For example, sys_make_dir("/a/b/c.txt") will create /a/ and /a/b/.
+ */
+int sys_make_dir(const char *path);
+
 const char *sys_get_clipboard_text(void* user);
 void sys_set_clipboard_text(void *user, const char *text);
 GLuint sys_get_screen_framebuffer(void);
+
+/*
+ * Function: sys_get_time
+ * Return the unix time (seconds since Jan 01 1970).
+ */
+double sys_get_time(void); // Unix time.
 // #############################
 
 
@@ -298,7 +575,7 @@ enum {
     DIALOG_FLAG_DIR     = 1 << 2,
 };
 
-// #### Texture ################
+// #### Section: Texture ################
 enum {
     TF_DEPTH    = 1 << 0,
     TF_STENCIL  = 1 << 1,
@@ -308,11 +585,13 @@ enum {
     TF_RGB_565  = 1 << 5,
     TF_HAS_TEX  = 1 << 6,
     TF_HAS_FB   = 1 << 7,
+    TF_NEAREST  = 1 << 8,
 };
 
+// Type: texture_t
+// Reresent a 2d texture.
 typedef struct texture texture_t;
 struct texture {
-    texture_t   *next;      // All the textures are in a global list.
     int         ref;        // For reference copy.
     char        *path;      // Only for image textures.
 
@@ -325,7 +604,9 @@ struct texture {
     GLuint framebuffer, depth, stencil;
 };
 
-texture_t *texture_new_image(const char *path);
+texture_t *texture_new_image(const char *path, int flags);
+texture_t *texture_new_from_buf(const uint8_t *data,
+                                int w, int h, int bpp, int flags);
 texture_t *texture_new_surface(int w, int h, int flags);
 texture_t *texture_new_buffer(int w, int h, int flags);
 void texture_get_data(const texture_t *tex, int w, int h, int bpp,
@@ -375,23 +656,30 @@ enum {
 // Represent an action.
 typedef struct action action_t;
 struct action {
-    const char      *id;    // Globally unique id.
-    const char      *help;  // Help text.
+    const char      *id;            // Globally unique id.
+    const char      *help;          // Help text.
     int             flags;
-    const char      *shortcut; // Optional shortcut.
+    const char      *shortcut;      // Optional shortcut.
+    int             icon;           // Optional icon id.
     int             (*func)(const action_t *a, astack_t *s);
     void            *data;
 
     // cfunc and csig can be used to directly call any function.
     void            *cfunc;
     const char      *csig;
+
+    // Used for export / import actions.
+    struct {
+        const char  *name;
+        const char  *ext;
+    } file_format;
 };
 
 void action_register(const action_t *action);
 const action_t *action_get(const char *id);
 int action_exec(const action_t *action, const char *sig, ...);
 int action_execv(const action_t *action, const char *sig, va_list ap);
-void actions_iter(int (*f)(const action_t *action));
+void actions_iter(int (*f)(const action_t *action, void *user), void *user);
 
 // Convenience macro to call action_exec directly from an action id.
 #define action_exec2(id, sig, ...) \
@@ -400,24 +688,49 @@ void actions_iter(int (*f)(const action_t *action));
 
 // Convenience macro to register an action from anywere in a c file.
 #define ACTION_REGISTER(id_, ...) \
-    static const action_t action_##id_ = {.id = #id_, __VA_ARGS__}; \
-    static void register_action_##id_() __attribute__((constructor)); \
-    static void register_action_##id_() { \
-        action_register(&action_##id_); \
+    static const action_t GOX_action_##id_ = {.id = #id_, __VA_ARGS__}; \
+    static void GOX_register_action_##id_(void) __attribute__((constructor)); \
+    static void GOX_register_action_##id_(void) { \
+        action_register(&GOX_action_##id_); \
     }
 
 // #############################
 
-// #### Tool/Operation/Painter #
+
+// All the icons positions inside icon.png (as Y*8 + X + 1).
 enum {
-    MODE_NULL,
-    MODE_ADD,
-    MODE_SUB,
-    MODE_SUB_CLAMP,
-    MODE_PAINT,
-    MODE_MAX,
-    MODE_INTERSECT,
+    ICON_NULL = 0,
+
+    ICON_TOOL_BRUSH = 1,
+    ICON_TOOL_SHAPE = 2,
+    ICON_TOOL_LASER = 3,
+    ICON_TOOL_PLANE = 4,
+    ICON_TOOL_MOVE = 5,
+    ICON_TOOL_PICK = 6,
+    ICON_TOOL_SELECTION = 7,
+    ICON_TOOL_PROCEDURAL = 8,
+
+    ICON_MODE_ADD = 9,
+    ICON_MODE_SUB = 10,
+    ICON_MODE_PAINT = 11,
+    ICON_TOOL_EXTRUDE = 12,
+
+    ICON_SHAPE_SPHERE = 17,
+    ICON_SHAPE_CUBE = 18,
+    ICON_SHAPE_CYLINDER = 19,
+
+    ICON_ADD = 25,
+    ICON_REMOVE = 26,
+    ICON_ARROW_DOWNWARD = 27,
+    ICON_ARROW_UPWARD = 28,
+    ICON_VISIBILITY = 29,
+    ICON_VISIBILITY_OFF = 30,
+    ICON_EDIT = 31,
+    ICON_LINK = 32,
 };
+
+
+// #### Tool/Operation/Painter #
 
 enum {
     TOOL_NONE = 0,
@@ -429,17 +742,21 @@ enum {
     TOOL_PICK_COLOR,
     TOOL_SELECTION,
     TOOL_PROCEDURAL,
+    TOOL_EXTRUDE,
+
+    TOOL_COUNT
 };
 
 // Mesh mask for goxel_update_meshes function.
 enum {
     MESH_LAYERS = 1 << 0,
     MESH_PICK   = 1 << 1,
+    MESH_RENDER = 1 << 2,
 };
 
 typedef struct shape {
     const char *id;
-    float (*func)(const vec3_t *p, const vec3_t *s, float smoothness);
+    float (*func)(const float p[3], const float s[3], float smoothness);
 } shape_t;
 
 void shapes_init(void);
@@ -448,125 +765,157 @@ extern shape_t shape_cube;
 extern shape_t shape_cylinder;
 
 
-// The painting context, including the tool, brush, mode, radius,
-// color, etc...
-typedef struct painter {
-    int             mode;
-    const shape_t   *shape;
-    uvec4b_t        color;
-    float           smoothness;
-} painter_t;
-
 // #### Block ##################
 // The block size can only be 16.
 #define BLOCK_SIZE 16
 #define VOXEL_TEXTURE_SIZE 8
 // Number of sub position per voxel in the marching
 // cube rendering.
-#define MC_VOXEL_SUB_POS 8
+#define MC_VOXEL_SUB_POS 8 // XXX: try to make it higher (up to 16!)
 
 // Structure used for the OpenGL array data of blocks.
 // XXX: we can probably make it smaller.
 typedef struct voxel_vertex
 {
-    vec3b_t  pos        __attribute__((aligned(4)));
-    vec3b_t  normal     __attribute__((aligned(4)));
-    uvec4b_t color      __attribute__((aligned(4)));
-    uvec2b_t pos_data   __attribute__((aligned(4)));
-    uvec2b_t uv         __attribute__((aligned(4)));
-    uvec2b_t bshadow_uv __attribute__((aligned(4)));
-    uvec2b_t bump_uv    __attribute__((aligned(4)));
+    uint8_t  pos[3]                     __attribute__((aligned(4)));
+    int8_t   normal[3]                  __attribute__((aligned(4)));
+    uint8_t  color[4]                   __attribute__((aligned(4)));
+    uint16_t pos_data                   __attribute__((aligned(4)));
+    uint8_t  uv[2]                      __attribute__((aligned(4)));
+    uint8_t  bshadow_uv[2]              __attribute__((aligned(4)));
+    uint8_t  bump_uv[2]                 __attribute__((aligned(4)));
 } voxel_vertex_t;
 
-// We use copy on write for the block data, so that it is cheap to copy
-// blocks.
-typedef struct block_data block_data_t;
-struct block_data
-{
-    int         ref;
-    uint64_t    id;
-    uvec4b_t    voxels[BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE]; // RGBA voxels.
+
+// ######## Section: Mesh util ############################################
+
+/*
+ * Enum: MODE
+ * Define how layers/brush are merged.  Each mode defines how to apply a
+ * source voxel into a destination voxel.
+ *
+ * MODE_OVER        - New values replace old one.
+ * MODE_SUB         - Substract source alpha from destination
+ * MODE_SUB_CLAMP   - Set alpha to the minimum between the destination value
+ *                    and one minus the source value.
+ * MODE_PAINT       - Set the color of the destination using the source.
+ * MODE_MAX         - Set alpha to the max of the source and destination.
+ * MODE_INTERSECT   - Set alpha to the min of the source and destination.
+ * MODE_MULT_ALPHA  - Multiply the source and dest using source alpha.
+ */
+enum {
+    MODE_NULL,
+    MODE_OVER,
+    MODE_SUB,
+    MODE_SUB_CLAMP,
+    MODE_PAINT,
+    MODE_MAX,
+    MODE_INTERSECT,
+    MODE_MULT_ALPHA,
 };
 
-typedef struct block block_t;
-struct block
-{
-    UT_hash_handle  hh;     // The hash table of pos -> blocks in a mesh.
-    block_data_t    *data;
-    vec3_t          pos;
-    int             id;     // id of the block in the mesh it belongs.
-};
-block_t *block_new(const vec3_t *pos, block_data_t *data);
-void block_delete(block_t *block);
-block_t *block_copy(const block_t *other);
-box_t block_get_box(const block_t *block, bool exact);
-void block_fill(block_t *block,
-                uvec4b_t (*get_color)(const vec3_t *pos, void *user_data),
-                void *user_data);
-int block_generate_vertices(const block_data_t *data, int effects,
-                            voxel_vertex_t *out);
-void block_op(block_t *block, painter_t *painter, const box_t *box);
-bool block_is_empty(const block_t *block, bool fast);
-void block_merge(block_t *block, const block_t *other, int op);
-uvec4b_t block_get_at(const block_t *block, const vec3_t *pos);
-void block_set_at(block_t *block, const vec3_t *pos, uvec4b_t v);
-
-// XXX: I think we should clean up this one.
-void block_blit(block_t *block, uvec4b_t *data,
-                int x, int y, int z, int w, int h, int d);
-void block_shift_alpha(block_t *block, int v);
-// #############################
+// Type: painter_t
+// The painting context, including the tool, brush, mode, radius,
+// color, etc...
+//
+// Attributes:
+//   mode - Define how colors are applied.  One of the <MODE> enum value.
+typedef struct painter {
+    int             mode;
+    const shape_t   *shape;
+    uint8_t         color[4];
+    float           smoothness;
+    int             symmetry; // bitfield X Y Z
+    float           (*box)[4][4];     // Clipping box (can be null)
+} painter_t;
 
 
+/* Function: mesh_get_box
+ * Compute the bounding box of a mesh.  */
+// XXX: remove this function!
+void mesh_get_box(const mesh_t *mesh, bool exact, float box[4][4]);
 
-// #### Mesh ###################
-typedef struct mesh mesh_t;
-struct mesh
-{
-    block_t *blocks;
-    int next_block_id;
-    int *ref;   // Used to implement copy on write of the blocks.
-    uint64_t id;     // global uniq id, change each time a mesh changes.
-};
-mesh_t *mesh_new(void);
-void mesh_clear(mesh_t *mesh);
-void mesh_delete(mesh_t *mesh);
-mesh_t *mesh_copy(const mesh_t *mesh);
-void mesh_set(mesh_t *mesh, const mesh_t *other);
-box_t mesh_get_box(const mesh_t *mesh, bool exact);
-void mesh_op(mesh_t *mesh, painter_t *painter, const box_t *box);
-void mesh_merge(mesh_t *mesh, const mesh_t *other, int op);
-block_t *mesh_add_block(mesh_t *mesh, block_data_t *data, const vec3_t *pos);
-void mesh_move(mesh_t *mesh, const mat4_t *mat);
-uvec4b_t mesh_get_at(const mesh_t *mesh, const vec3_t *pos);
-void mesh_set_at(mesh_t *mesh, const vec3_t *pos, uvec4b_t v);
-void mesh_remove_empty_blocks(mesh_t *mesh);
+/* Function: mesh_op
+ * Apply a paint operation to a mesh.
+ * This function render geometrical 3d shapes into a mesh.
+ * The shape, mode and color are defined in the painter argument.
+ *
+ * Parameters:
+ *   mesh    - The mesh we paint into.
+ *   painter - Defines the paint operation to apply.
+ *   box     - Defines the position and size of the shape as the
+ *             transformation matrix from the zero centered unit box.
+ *
+ * See Also:
+ *   <painter_t>
+ */
+void mesh_op(mesh_t *mesh, const painter_t *painter, const float box[4][4]);
 
-// XXX: clean up this.  We should use a struct to represent a data cube.
-void mesh_blit(mesh_t *mesh, uvec4b_t *data,
-               int x, int y, int z,
-               int w, int h, int d);
+// XXX: to cleanup.
+void mesh_extrude(mesh_t *mesh,
+                  const float plane[4][4],
+                  const float box[4][4]);
+
+/* Function: mesh_blit
+ *
+ * Blit voxel data into a mesh.
+ * This is the fastest way to quickly put data into a mesh.
+ *
+ * Parameters:
+ *   mesh - The mesh we blit into.
+ *   data - Pointer to voxel data (RGBA values, in xyz order).
+ *   x    - X pos.
+ *   y    - Y pos.
+ *   z    - Z pos.
+ *   w    - Width of the data.
+ *   h    - Height of the data.
+ *   d    - Depth of the data.
+ *   iter - Optional iterator for optimized access.
+ */
+void mesh_blit(mesh_t *mesh, const uint8_t *data,
+               int x, int y, int z, int w, int h, int d,
+               mesh_iterator_t *iter);
+
+void mesh_move(mesh_t *mesh, const float mat[4][4]);
+
 void mesh_shift_alpha(mesh_t *mesh, int v);
 
-#define MESH_ITER_BLOCKS(m, b) for (b = m->blocks; b; b = b->hh.next)
+// Compute the selection mask for a given condition.
+int mesh_select(const mesh_t *mesh,
+                const int start_pos[3],
+                int (*cond)(const uint8_t value[4],
+                            const uint8_t neighboors[6][4],
+                            const uint8_t mask[6],
+                            void *user),
+                void *user, mesh_t *selection);
 
-// Convenience macro to iter all the voxels of a mesh.
-// Given:
-//    m         The mesh pointer.
-//    b         A block pointer.
-//    x, y, z   integer, set to the position of the voxel inside the block.
-//    v         uvec4b_t, set to the color of the voxel.
-#define MESH_ITER_VOXELS(m, b, x, y, z, v) \
-    MESH_ITER_BLOCKS(m, b) \
-        for (z = 1; z < BLOCK_SIZE - 1; z++) \
-        for (y = 1; y < BLOCK_SIZE - 1; y++) \
-        for (x = 1; x < BLOCK_SIZE - 1; x++) \
-            if ((v = block->data->voxels[ \
-                    x + y * BLOCK_SIZE + z * BLOCK_SIZE * BLOCK_SIZE]).a)
+/*
+ * Function: mesh_merge
+ * Merge a mesh into an other using a given blending function.
+ *
+ * Parameters:
+ *   mesh   - The destination mesh we merge into.
+ *   other  - The source mesh we merge.  Unchanged by this function.
+ *   mode   - The blending function used.  One of the <MODE> enum values.
+ *   color  - A color to apply to the source mesh before merging.  Can be
+ *            set to NULL.
+ */
+void mesh_merge(mesh_t *mesh, const mesh_t *other, int mode,
+                const uint8_t color[4]);
 
-// #############################
+int mesh_generate_vertices(const mesh_t *mesh, const int block_pos[3],
+                           int effects, voxel_vertex_t *out);
 
+// XXX: use int[2][3] for the box?
+void mesh_crop(mesh_t *mesh, const float box[4][4]);
 
+/* Function: mesh_crc32
+ * Compute the crc32 of the mesh data as an array of xyz rgba values.
+ *
+ * This is only used in the tests, to make sure that we can still open
+ * old file formats.
+ */
+uint32_t mesh_crc32(const mesh_t *mesh);
 
 // #### Renderer ###############
 
@@ -579,6 +928,15 @@ enum {
     EFFECT_SEE_BACK         = 1 << 6,
     EFFECT_MARCHING_CUBES   = 1 << 7,
     EFFECT_SHADOW_MAP       = 1 << 8,
+    EFFECT_FLAT             = 1 << 9,
+
+    // For render box.
+    EFFECT_NO_SHADING       = 1 << 10,
+    EFFECT_STRIP            = 1 << 11,
+    EFFECT_WIREFRAME        = 1 << 12,
+
+    EFFECT_PROJ_SCREEN      = 1 << 13, // Image project in screen.
+    EFFECT_ANTIALIASING     = 1 << 14,
 };
 
 typedef struct {
@@ -596,9 +954,10 @@ typedef struct renderer renderer_t;
 typedef struct render_item_t render_item_t;
 struct renderer
 {
-    mat4_t view_mat;
-    mat4_t proj_mat;
+    float view_mat[4][4];
+    float proj_mat[4][4];
     int    fbo;     // The renderer target framebuffer.
+    float  scale;   // For retina display.
 
     struct {
         float  pitch;
@@ -615,38 +974,64 @@ struct renderer
 void render_init(void);
 void render_deinit(void);
 void render_mesh(renderer_t *rend, const mesh_t *mesh, int effects);
-void render_plane(renderer_t *rend, const plane_t *plane,
-                  const uvec4b_t *color);
-void render_line(renderer_t *rend, const vec3_t *a, const vec3_t *b,
-                 const uvec4b_t *color);
-void render_box(renderer_t *rend, const box_t *box, bool solid,
-                const uvec4b_t *color, int strip);
-void render_sphere(renderer_t *rend, const mat4_t *mat);
-void render_img(renderer_t *rend, texture_t *tex, const mat4_t *mat);
-void render_rect(renderer_t *rend, const plane_t *plane, int strip);
+void render_grid(renderer_t *rend, const float plane[4][4],
+                 const uint8_t color[4], const float clip_box[4][4]);
+void render_line(renderer_t *rend, const float a[3], const float b[3],
+                 const uint8_t color[4]);
+void render_box(renderer_t *rend, const float box[4][4],
+                const uint8_t color[4], int effects);
+void render_sphere(renderer_t *rend, const float mat[4][4]);
+void render_img(renderer_t *rend, texture_t *tex, const float mat[4][4],
+                int efffects);
+
+/*
+ * Function: render_img2
+ * Render an image directly from it's pixel data.
+ *
+ * XXX: this is experimental: eventually I think we should remove render_img
+ * and only user render_img2 (renamed to render_img).
+ */
+void render_img2(renderer_t *rend,
+                 const uint8_t *data, int w, int h, int bpp,
+                 const float mat[4][4], int effects);
+
+void render_rect(renderer_t *rend, const float plane[4][4], int effects);
 // Flushes all the queued render items.  Actually calls opengl.
 //  rect: the viewport rect (passed to glViewport).
 //  clear_color: clear the screen with this first.
-void render_render(renderer_t *rend, const int rect[4],
-                   const vec4_t *clear_color);
+void render_submit(renderer_t *rend, const int rect[4],
+                   const uint8_t clear_color[4]);
 int render_get_default_settings(int i, char **name, render_settings_t *out);
 // Compute the light direction in the model coordinates (toward the light)
-vec3_t render_get_light_dir(const renderer_t *rend);
+void render_get_light_dir(const renderer_t *rend, float out[3]);
 
-// #############################
+// Ugly function that return the position of the block at a given id
+// when the mesh is rendered with render_mesh.
+void render_get_block_pos(renderer_t *rend, const mesh_t *mesh,
+                          int id, int pos[3]);
 
 
+/* ##############################
+ * Section: Model3d
+ *
+ * Functions to render 3d vertex models, like cube, plane, etc.
+ */
 
-
-// #### Model3d ################
-
+/*
+ * Type: model_vertex_t
+ * Container for a single vertex shader data.
+ */
 typedef struct {
-     vec3_t   pos       __attribute__((aligned(4)));
-     vec3_t   normal    __attribute__((aligned(4)));
-     uvec4b_t color     __attribute__((aligned(4)));
-     vec2_t   uv        __attribute__((aligned(4)));
+     float    pos[3]    __attribute__((aligned(4)));
+     float    normal[3] __attribute__((aligned(4)));
+     uint8_t  color[4]  __attribute__((aligned(4)));
+     float    uv[2]     __attribute__((aligned(4)));
 } model_vertex_t;
 
+/*
+ * Type: model3d_t
+ * Define a 3d model.
+ */
 typedef struct {
     int              nb_vertices;
     model_vertex_t   *vertices;
@@ -660,26 +1045,72 @@ typedef struct {
     bool    dirty;
 } model3d_t;
 
+/*
+ * Function: model3d_init
+ * Should be called once before any mode3d functions.
+ */
 void model3d_init(void);
-model3d_t *model3d_cube(void);
-model3d_t *model3d_wire_cube(void);
-model3d_t *model3d_sphere(int slices, int stacks);
-model3d_t *model3d_grid(int nx, int ny);
-model3d_t *model3d_line(void);
-model3d_t *model3d_rect(void);
-model3d_t *model3d_wire_rect(void);
-void model3d_render(model3d_t *model3d,
-                    const mat4_t *model, const mat4_t *proj,
-                    const uvec4b_t *color,
-                    const texture_t *tex,
-                    int   strip, // 0: no, 1: fixed, 2: moving.
-                    float fade, const vec3_t *fade_center);
 
+/*
+ * Function: model3d_cube
+ * Create a 3d cube from (0, 0, 0) to (1, 1, 1)
+ */
+model3d_t *model3d_cube(void);
+
+/*
+ * Function: model3d_wire_cube
+ * Create a 3d wire cube from (0, 0, 0) to (1, 1, 1)
+ */
+model3d_t *model3d_wire_cube(void);
+
+/*
+ * Function: model3d_sphere
+ * Create a sphere of radius 1, centered at (0, 0).
+ */
+model3d_t *model3d_sphere(int slices, int stacks);
+
+/*
+ * Function: model3d_grid
+ * Create a grid plane.
+ */
+model3d_t *model3d_grid(int nx, int ny);
+
+/*
+ * Function: model3d_line
+ * Create a line from (-0.5, 0, 0) to (+0.5, 0, 0).
+ */
+model3d_t *model3d_line(void);
+
+/*
+ * Function: model3d_line
+ * Create a 2d rect on xy plane, of size 1x1 centered on the origin.
+ */
+model3d_t *model3d_rect(void);
+
+/*
+ * Function: model3d_line
+ * Create a 2d rect on xy plane, of size 1x1 centered on the origin.
+ */
+model3d_t *model3d_wire_rect(void);
+
+/*
+ * Function: model3d_render
+ * Render a 3d model using OpenGL calls.
+ */
+void model3d_render(model3d_t *model3d,
+                    const float model[4][4],
+                    const float view[4][4],
+                    const float proj[4][4],
+                    const uint8_t color[4],
+                    const texture_t *tex,
+                    const float light[3],
+                    const float clip_box[4][4],
+                    int   effects);
 
 // #### Palette ################
 
 typedef struct {
-    uvec4b_t color;
+    uint8_t  color[4];
     char     name[32];
 } palette_entry_t;
 
@@ -696,7 +1127,8 @@ struct palette {
 void palette_load_all(palette_t **list);
 
 // Generate an optimal palette whith a fixed number of colors from a mesh.
-void quantization_gen_palette(const mesh_t *mesh, int nb, uvec4b_t *palette);
+void quantization_gen_palette(const mesh_t *mesh, int nb,
+                              uint8_t (*palette)[4]);
 
 // #############################
 
@@ -723,23 +1155,175 @@ enum {
     KEY_CONTROL     = 341,
 };
 
-// Flags to set where the mouse snap.
+// Flags to set where the mouse snap.  In order of priority.
 enum {
-    SNAP_MESH           = 1 << 0,
-    SNAP_PLANE          = 1 << 1,
-    SNAP_SELECTION_IN   = 1 << 2,
-    SNAP_SELECTION_OUT  = 1 << 3,
+    SNAP_IMAGE_BOX      = 1 << 0,
+    SNAP_SELECTION_IN   = 1 << 1,
+    SNAP_SELECTION_OUT  = 1 << 2,
+    SNAP_MESH           = 1 << 3,
+    SNAP_PLANE          = 1 << 4,
+    SNAP_CAMERA         = 1 << 5, // Used for laser tool.
+    SNAP_LAYER_OUT      = 1 << 6, // Snap the layer box.
+
+    SNAP_ROUNDED        = 1 << 8, // Round the result.
 };
+
+// A finger touch or mouse click state.
+// `down` represent each button in the mouse.  For touch events only the
+// first element is set.
+typedef struct {
+    float   pos[2];
+    bool    down[3];
+} touch_t;
 
 typedef struct inputs
 {
     int         window_size[2];
+    float       scale;
     bool        keys[512]; // Table of all the pressed keys.
     uint32_t    chars[16];
-    vec2_t      mouse_pos;
-    bool        mouse_down[3];
+    touch_t     touches[4];
     float       mouse_wheel;
+    int         framebuffer; // Screen framebuffer
 } inputs_t;
+
+
+
+// #### Mouse gestures #####################################3
+
+enum {
+    // Supported type of gestures.
+    GESTURE_DRAG        = 1 << 0,
+    GESTURE_CLICK       = 1 << 1,
+    GESTURE_PINCH       = 1 << 2,
+    GESTURE_HOVER       = 1 << 3,
+
+    // Gesture states.
+    GESTURE_POSSIBLE = 0,
+    GESTURE_RECOGNISED,
+    GESTURE_BEGIN,
+    GESTURE_UPDATE,
+    GESTURE_END,
+    GESTURE_TRIGGERED,
+    GESTURE_FAILED,
+};
+
+typedef struct gesture gesture_t;
+struct gesture
+{
+    int     type;
+    int     button;
+    int     state;
+    float   viewport[4];
+    float   pos[2];
+    float   start_pos[2][2];
+    float   pinch;
+    float   rotation;
+    int     (*callback)(const gesture_t *gest, void *user);
+};
+
+int gesture_update(int nb, gesture_t *gestures[],
+                   const inputs_t *inputs, const float viewport[4],
+                   void *user);
+
+
+/* #############################
+ * Section: Camera
+ * Camera manipulation functions.
+ */
+
+/* Type: camera_t
+ * Camera structure.
+ *
+ * The actual position of the camera is constructed from a distance, a
+ * rotation and an offset:
+ *
+ * Pos = ofs * rot * dist
+ *
+ * Attributes:
+ *   next, prev - Used for linked list of cameras in an image.
+ *   name       - Name to show in the GUI.
+ *   ortho      - Set to true for orthographic projection.
+ *   dist       - Distance used to compute the position.
+ *   rot        - Camera rotation quaternion.
+ *   ofs        - Lateral offset of the camera position.
+ *   fovy       - Field of view in y direction.
+ *   aspect     - Aspect ratio.
+ *   view_mat   - Modelview transformation matrix (auto computed).
+ *   proj_mat   - Projection matrix (auto computed).
+ */
+typedef struct camera camera_t;
+struct camera
+{
+    camera_t  *next, *prev; // List of camera in an image.
+    char   name[128];  // 127 chars max.
+    bool   ortho; // Set to true for orthographic projection.
+    float  dist;
+    float  rot[4]; // Quaternion.
+    float  ofs[3];
+    float  fovy;
+    float  aspect;
+
+    // Auto computed from other values:
+    float view_mat[4][4];    // Model to view transformation.
+    float proj_mat[4][4];    // Proj transform from camera coordinates.
+};
+
+/*
+ * Function: camera_new
+ * Create a new camera.
+ *
+ * Parameters:
+ *   name - The name of the camera.
+ *
+ * Return:
+ *   A newly instanciated camera.
+ */
+camera_t *camera_new(const char *name);
+
+/*
+ * Function: camera_delete
+ * Delete a camera
+ */
+void camera_delete(camera_t *camera);
+
+/*
+ * Function: camera_set
+ * Set a camera position from an other camera.
+ */
+void camera_set(camera_t *camera, const camera_t *other);
+
+/*
+ * Function: camera_update
+ * Update camera matrices.
+ */
+void camera_update(camera_t *camera);
+
+/*
+ * Function: camera_set_target
+ * Adjust the camera settings so that the rotation works for a given
+ * position.
+ */
+void camera_set_target(camera_t *camera, const float pos[3]);
+
+/*
+ * Function: camera_get_ray
+ * Get the raytracing ray of the camera at a given screen position.
+ *
+ * Parameters:
+ *   win   - Pixel position in screen coordinates.
+ *   view  - Viewport rect: [min_x, min_y, max_x, max_y].
+ *   o     - Output ray origin.
+ *   d     - Output ray direction.
+ */
+void camera_get_ray(const camera_t *camera, const float win[2],
+                    const float viewport[4], float o[3], float d[3]);
+
+/*
+ * Function: camera_fit_box
+ * Move a camera so that a given box is entirely visible.
+ */
+void camera_fit_box(camera_t *camera, const float box[4][4]);
 
 typedef struct history history_t;
 
@@ -747,18 +1331,25 @@ typedef struct layer layer_t;
 struct layer {
     layer_t     *next, *prev;
     mesh_t      *mesh;
+    int         id;         // Uniq id in the image (for clones).
     bool        visible;
-    char        name[128];  // 127 chars max.
-    // mat and image can be used to render a 2d image on top of the layer.
-    // This is convenient when want to draw something using a picture model.
-    mat4_t      mat;
+    char        name[256];  // 256 chars max.
+    float       box[4][4];  // Bounding box.
+    float       mat[4][4];
+    // For 2d image layers.
     texture_t   *image;
+    // For clone layers:
+    int         base_id;
+    uint64_t    base_mesh_key;
 };
 
 typedef struct image image_t;
 struct image {
     layer_t *layers;
     layer_t *active_layer;
+    camera_t *cameras;
+    camera_t *active_camera;
+    float    box[4][4];
 
     // For saving.
     char    *path;
@@ -766,11 +1357,10 @@ struct image {
     int     export_height;
 
     image_t *history;
-    image_t *history_next, *history_prev, *history_current;
+    image_t *history_next, *history_prev;
 };
 
 image_t *image_new(void);
-image_t *image_copy(image_t *img);
 void image_delete(image_t *img);
 layer_t *image_add_layer(image_t *img);
 void image_delete_layer(image_t *img, layer_t *layer);
@@ -780,6 +1370,7 @@ void image_merge_visible_layers(image_t *img);
 void image_history_push(image_t *img);
 void image_undo(image_t *img);
 void image_redo(image_t *img);
+bool image_layer_can_edit(const image_t *img, const layer_t *layer);
 
 // ##### Procedural rendering ########################
 
@@ -806,102 +1397,149 @@ typedef struct proc {
 
 int proc_parse(const char *txt, gox_proc_t *proc);
 void proc_release(gox_proc_t *proc);
-int proc_start(gox_proc_t *proc, const box_t *box);
+int proc_start(gox_proc_t *proc, const float box[4][4]);
 int proc_stop(gox_proc_t *proc);
 int proc_iter(gox_proc_t *proc);
 
 // Get the list of programs saved in data/procs.
 int proc_list_examples(void (*f)(int index,
-                                 const char *name, const char *code));
+                                 const char *name, const char *code,
+                                 void *user), void *user);
 
-// #############################
 
-typedef struct camera
+// Represent a 3d cursor.
+// The program keeps track of two cursors, that are then used by the tools.
+
+enum {
+    // The state flags of the cursor.
+    CURSOR_PRESSED      = 1 << 0,
+    CURSOR_SHIFT        = 1 << 1,
+    CURSOR_CTRL         = 1 << 2,
+
+    CURSOR_OUT          = 1 << 3, // Outside of sensing area.
+};
+
+typedef struct gesture3d gesture3d_t;
+
+typedef struct cursor {
+    float  pos[3];
+    float  normal[3];
+    int    snap_mask;
+    int    snaped;
+    int    flags; // Union of CURSOR_* values.
+    float  snap_offset; // XXX: fix this.
+} cursor_t;
+
+// #### 3d gestures
+struct gesture3d
 {
-    bool   ortho; // Set to true for orthographic projection.
-    float  dist;
-    quat_t rot;
-    vec3_t ofs;
-    float  fovy;
-    float  aspect;
+    int         type;
+    int         state;
+    int         buttons; // CURSOR_SHIFT | CURSOR_CTRL
+    cursor_t    *cursor;
+    int         (*callback)(gesture3d_t *gest, void *user);
+};
 
-    // If set, we smoothly update the offset to reach target.
-    bool   move_to_target;
-    vec3_t target;
+int gesture3d(gesture3d_t *gest, cursor_t *curs, void *user);
 
-    // Auto computed from other values:
-    mat4_t view_mat;    // Model to view transformation.
-    mat4_t proj_mat;    // Proj transform from camera coordinates.
-} camera_t;
+enum {
+    // Tools flags.
+    TOOL_REQUIRE_CAN_EDIT = 1 << 0, // Set to tools that can edit the layer.
+    TOOL_REQUIRE_CAN_MOVE = 1 << 1, // Set to tools that can move the layer.
+    TOOL_ALLOW_PICK_COLOR = 1 << 2, // Ctrl switches to pick color tool.
+};
 
-void camera_update(camera_t *camera);
+// Tools
+typedef struct tool tool_t;
+struct tool {
+    int id;
+    const char *action_id;
+    int (*iter_fn)(tool_t *tool, const float viewport[4]);
+    int (*gui_fn)(tool_t *tool);
+    const char *shortcut;
+    int state; // XXX: to be removed I guess.
+    int flags;
+};
 
-// Get the raytracing ray of the camera at a given screen position.
-// win:     pixel position in screen coordinates.
-// view:    viewport rect: [min_x, min_y, max_x, max_y].
-// o:       output ray origin.
-// d:       output ray direction.
-void camera_get_ray(const camera_t *camera, const vec2_t *win,
-                    const vec4_t *view, vec3_t *o, vec3_t *d);
+#define TOOL_REGISTER(id_, name_, klass_, ...) \
+    static klass_ GOX_tool_##id_ = {\
+            .tool = { \
+                .id = id_, .action_id = "tool_set_" #name_, __VA_ARGS__ \
+            } \
+        }; \
+    static void GOX_register_tool_##tool_(void) __attribute__((constructor)); \
+    static void GOX_register_tool_##tool_(void) { \
+        tool_register_(&GOX_tool_##id_.tool); \
+    }
+
+void tool_register_(const tool_t *tool);
+int tool_iter(tool_t *tool, const float viewport[4]);
+int tool_gui(tool_t *tool);
+
+int tool_gui_snap(void);
+int tool_gui_mode(void);
+int tool_gui_shape(void);
+int tool_gui_radius(void);
+int tool_gui_smoothness(void);
+int tool_gui_color(void);
+int tool_gui_symmetry(void);
+
+
 
 typedef struct goxel
 {
-    vec2i_t    screen_size;
+    int        screen_size[2];
+    float      screen_scale;
     image_t    *image;
 
     mesh_t     *layers_mesh; // All the layers combined.
-    mesh_t     *pick_mesh;   // Used for picking (always layers_mesh?)
-
-    // Meshes used by the tools.
-    mesh_t     *tool_mesh_orig;
+    // Tools can set this mesh and it will replace the current layer mesh
+    // during render.
     mesh_t     *tool_mesh;
+    mesh_t     *render_mesh; // All the layers + tool mesh.
+
+    struct     {
+        mesh_t *mesh;
+        float  box[4][4];
+    } clipboard;
 
     history_t  *history;     // Undo/redo history.
-    int        snap;
-    float      snap_offset;  // Only for brush tool.
+    int        snap_mask;    // Global snap mask (can edit in the GUI).
+    float      snap_offset;  // Only for brush tool, remove that?
 
-    plane_t    plane;         // The snapping plane.
+    float      plane[4][4];         // The snapping plane.
     bool       plane_hidden;  // Set to true to hide the plane.
     bool       show_export_viewport;
 
     camera_t   camera;
 
-    uvec4b_t   back_color;
-    uvec4b_t   grid_color;
+    bool       use_cycles; // Render with cycles.
+    uint8_t    back_color[4];
+    uint8_t    grid_color[4];
+    uint8_t    image_box_color[4];
 
     texture_t  *pick_fbo;
     painter_t  painter;
     renderer_t rend;
 
-    int        tool;
-    // Used when we change the effective tool with ctrl.
-    int        prev_tool;
+    cursor_t   cursor;
+
+    tool_t     *tool;
     float      tool_radius;
+    bool       no_edit; // Disable editing.
 
     // Some state for the tool iter functions.
-    // XXX: move this into tool.c
-    int        tool_state;
-    int        tool_snape_face;
-    // Structure used to skip rendering when don't move the mouse.
-    struct     {
-        vec3_t     pos;
-        bool       pressed;
-        int        mode;
-    }          tool_last_op;
-    vec3_t     tool_start_pos;
-    plane_t    tool_plane;
+    float      tool_plane[4][4];
     bool       tool_shape_two_steps; // Param of the shape tool.
 
-    box_t      selection;   // The selection box.
+    float      selection[4][4];   // The selection box.
 
     struct {
-        quat_t rotation;
-        vec2_t pos;
-        vec3_t camera_ofs;
+        float  rotation[4];
+        float  pos[2];
+        float  camera_ofs[3];
     } move_origin;
 
-    bool       painting;    // Set to true when we are in a painting operation.
-    bool       moving;      // Set to true while in a movement operation.
     gox_proc_t proc;        // The current procedural rendering (if any).
 
     palette_t  *palettes;   // The list of all the palettes
@@ -909,14 +1547,27 @@ typedef struct goxel
     char       *help_text;  // Seen in the bottom of the screen.
     char       *hint_text;  // Seen in the bottom of the screen.
 
-    int        frame_count;       // Global frames counter.
-    int64_t    frame_clock;       // Clock time at beginning of the frame.
-
-    // Global uid counter.
-    uint64_t   next_uid;
-
-    int        block_count; // Counter for the number of block data.
+    int        frame_count; // Global frames counter.
+    double     frame_time;  // Clock time at beginning of the frame (sec)
+    double     fps;         // Average fps.
     bool       quit;        // Set to true to quit the application.
+
+    struct {
+        gesture_t drag;
+        gesture_t pan;
+        gesture_t rotate;
+        gesture_t hover;
+    } gestures;
+
+    // Hold info about the cycles rendering task.
+    struct {
+        int status;
+        uint8_t *buf;       // RGBA buffer.
+        int w, h;           // Size of the buffer.
+        char output[1024];  // Output path.
+        float progress;
+    } export_task;
+
 } goxel_t;
 
 // the global goxel instance.
@@ -926,91 +1577,194 @@ void goxel_init(goxel_t *goxel);
 void goxel_release(goxel_t *goxel);
 void goxel_iter(goxel_t *goxel, inputs_t *inputs);
 void goxel_render(goxel_t *goxel);
-void goxel_render_view(goxel_t *goxel, const vec4_t *rect);
+void goxel_render_view(goxel_t *goxel, const float viewport[4]);
+void goxel_render_export_view(const float viewport[4]);
 // Called by the gui when the mouse hover a 3D view.
 // XXX: change the name since we also call it when the mouse get out of
 // the view.
-void goxel_mouse_in_view(goxel_t *goxel, const vec2_t *view_size,
-                         const inputs_t *inputs, bool inside);
+void goxel_mouse_in_view(goxel_t *goxel, const float viewport[4],
+                         const inputs_t *inputs);
 
-int goxel_unproject(goxel_t *goxel, const vec2_t *view_size,
-                    const vec2_t *pos, bool on_surface,
-                    vec3_t *out, vec3_t *normal);
+int goxel_unproject(goxel_t *goxel, const float viewport[4],
+                    const float pos[2], int snap_mask, float offset,
+                    float out[3], float normal[3]);
 
-bool goxel_unproject_on_mesh(goxel_t *goxel, const vec2_t *view_size,
-                     const vec2_t *pos, mesh_t *mesh,
-                     vec3_t *out, vec3_t *normal);
+bool goxel_unproject_on_mesh(goxel_t *goxel, const float viewport[4],
+                     const float pos[2], mesh_t *mesh,
+                     float out[3], float normal[3]);
 
-bool goxel_unproject_on_plane(goxel_t *goxel, const vec2_t *view_size,
-                     const vec2_t *pos, const plane_t *plane,
-                     vec3_t *out, vec3_t *normal);
-bool goxel_unproject_on_box(goxel_t *goxel, const vec2_t *view_size,
-                     const vec2_t *pos, const box_t *box, bool inside,
-                     vec3_t *out, vec3_t *normal, int *face);
+bool goxel_unproject_on_plane(goxel_t *goxel, const float viewport[4],
+                     const float pos[2], const float plane[4][4],
+                     float out[3], float normal[3]);
+bool goxel_unproject_on_box(goxel_t *goxel, const float viewport[4],
+                     const float pos[2], const float box[4][4], bool inside,
+                     float out[3], float normal[3], int *face);
 // Recompute the meshes.  mask from MESH_ enum.
 void goxel_update_meshes(goxel_t *goxel, int mask);
 
 void goxel_set_help_text(goxel_t *goxel, const char *msg, ...);
 void goxel_set_hint_text(goxel_t *goxel, const char *msg, ...);
 
-// XXX: use actions for all that!
-void goxel_undo(goxel_t *goxel);
-void goxel_redo(goxel_t *goxel);
 void goxel_import_image_plane(goxel_t *goxel, const char *path);
+
+// Render the view into an RGB[A] buffer.
+void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp);
+
 // #############################
 
-void save_to_file(goxel_t *goxel, const char *path);
-void load_from_file(goxel_t *goxel, const char *path);
+void save_to_file(goxel_t *goxel, const char *path, bool with_preview);
+int load_from_file(goxel_t *goxel, const char *path);
 
+// Iter info of a gox file, without actually reading it.
+// For the moment only returns the image preview if available.
+int gox_iter_infos(const char *path,
+                   int (*callback)(const char *attr, int size,
+                                   void *value, void *user),
+                   void *user);
 
-int tool_iter(goxel_t *goxel, int tool, const inputs_t *inputs, int state,
-              const vec2_t *view_size, bool inside);
-void tool_cancel(goxel_t *goxel, int tool, int state);
 
 // #### Colors functions #######
-uvec3b_t hsl_to_rgb(uvec3b_t hsl);
-uvec3b_t rgb_to_hsl(uvec3b_t rgb);
+void hsl_to_rgb(const uint8_t hsl[3], uint8_t rgb[3]);
+void rgb_to_hsl(const uint8_t rgb[3], uint8_t hsl[3]);
 
 // #### Gui ####################
 
-void gui_init(void);
+#define THEME_SIZES(X) \
+    X(item_height) \
+    X(icons_height) \
+    X(item_padding_h) \
+    X(item_rounding) \
+    X(item_spacing_h) \
+    X(item_spacing_v) \
+    X(item_inner_spacing_h)
+
+
+enum {
+    THEME_GROUP_BASE,
+    THEME_GROUP_WIDGET,
+    THEME_GROUP_TAB,
+    THEME_GROUP_MENU,
+    THEME_GROUP_COUNT
+};
+
+enum {
+    THEME_COLOR_BACKGROUND,
+    THEME_COLOR_OUTLINE,
+    THEME_COLOR_INNER,
+    THEME_COLOR_INNER_SELECTED,
+    THEME_COLOR_TEXT,
+    THEME_COLOR_TEXT_SELECTED,
+    THEME_COLOR_COUNT
+};
+
+typedef struct {
+    const char *name;
+    int parent;
+    bool colors[THEME_COLOR_COUNT];
+} theme_group_info_t;
+extern theme_group_info_t THEME_GROUP_INFOS[THEME_GROUP_COUNT];
+
+typedef struct {
+    const char *name;
+} theme_color_info_t;
+extern theme_color_info_t THEME_COLOR_INFOS[THEME_COLOR_COUNT];
+
+typedef struct {
+    uint8_t colors[THEME_COLOR_COUNT][4];
+} theme_group_t;
+
+typedef struct theme theme_t;
+struct theme {
+    char name[64];
+
+    struct {
+        int  item_height;
+        int  icons_height;
+        int  item_padding_h;
+        int  item_rounding;
+        int  item_spacing_h;
+        int  item_spacing_v;
+        int  item_inner_spacing_h;
+    } sizes;
+
+    theme_group_t groups[THEME_GROUP_COUNT];
+
+    theme_t *prev, *next; // Global list of themes.
+};
+
+// Return the current theme.
+theme_t *theme_get(void);
+theme_t *theme_get_list(void);
+void theme_revert_default(void);
+void theme_save(void);
+void theme_get_color(int group, int color, bool selected, uint8_t out[4]);
+void theme_set(const char *name);
+
+/* ################################
+ * Section: Gui
+ */
+
 void gui_release(void);
 void gui_iter(goxel_t *goxel, const inputs_t *inputs);
 void gui_render(void);
+
+// Gui widgets:
+void gui_text(const char *label, ...);
+bool gui_button(const char *label, float w, int icon);
+void gui_group_begin(const char *label);
+void gui_group_end(void);
+bool gui_checkbox(const char *label, bool *v, const char *hint);
+bool gui_input_int(const char *label, int *v, int minv, int maxv);
+bool gui_input_float(const char *label, float *v, float step,
+                     float minv, float maxv, const char *format);
+bool gui_angle(const char *id, float *v, int vmin, int vmax);
+bool gui_bbox(float box[4][4]);
+bool gui_quat(const char *label, float q[4]);
+bool gui_action_button(const char *id, const char *label, float size,
+                       const char *sig, ...);
+bool gui_action_checkbox(const char *id, const char *label);
+bool gui_selectable(const char *name, bool *v, const char *tooltip, float w);
+bool gui_selectable_icon(const char *name, bool *v, int icon);
+bool gui_color(const char *label, uint8_t color[4]);
+bool gui_input_text(const char *label, char *buf, int size);
+bool gui_input_text_multiline(const char *label, char *buf, int size,
+                              float width, float height);
+void gui_input_text_multiline_highlight(int line);
+bool gui_combo(const char *label, int *v, const char **names, int nb);
+
+float gui_get_avail_width(void);
+void gui_same_line(void);
+void gui_enabled_begin(bool enabled);
+void gui_enabled_end(void);
+void gui_alert(const char *title, const char *msg);
+
+enum {
+    GUI_POPUP_FULL      = 1 << 0,
+    GUI_POPUP_RESIZE    = 1 << 1,
+};
+
+
+/*
+ * Function: gui_open_popup
+ * Open a modal popup.
+ *
+ * Parameters:
+ *    title - The title of the popup.
+ *    flags - Union of <GUI_POPUP_FLAGS> values.
+ *    data  - Data passed to the popup.  It will be automatically released
+ *            by the gui.
+ *    func  - The popup function, that render the popup gui.  Should return
+ *            true to close the popup.
+ */
+void gui_open_popup(const char *title, int flags, void *data,
+                    bool (*func)(void *data));
+void gui_popup_body_begin(void);
+void gui_popup_body_end(void);
 
 // #############################
 
 void wavefront_export(const mesh_t *mesh, const char *path);
 void ply_export(const mesh_t *mesh, const char *path);
-
-
-// #### DICOM files support ####
-
-typedef struct {
-    int     instance_number;
-    float   slice_location;
-    int     samples_per_pixel;
-    int     rows;
-    int     columns;
-    int     bits_allocated;
-    int     bits_stored;
-    int     high_bit;
-
-    int     data_size;
-    char    *path;      // If you set it, you have to remember to free it.
-} dicom_t;
-
-void dicom_load(const char *path, dicom_t *dicom,
-                char *out_buffer, int buffer_size);
-void dicom_import(const char *dir);
-
-
-// #############################
-
-void qubicle_import(const char *path);
-void qubicle_export(const mesh_t *mesh, const char *path);
-
-void vox_import(const char *path);
 
 // ##### Assets manager ########################
 // All the assets are saved in binary directly in the code, using
@@ -1037,7 +1791,40 @@ void mustache_free(mustache_t *m);
 
 // ####### Cache manager #########################
 // Allow to cache blocks merge operations.
-void cache_add(const void *key, int len, block_data_t *data);
-block_data_t *cache_get(const void *key, int len);
+typedef struct cache cache_t;
+// Create a new cache with a given max size (in byte).
+cache_t *cache_create(int size);
+// Add an item into the cache.
+// Inputs:
+//  key, keylen     Define the unique key for the cache item.
+//  data            Pointer to the item data.  The cache takes ownership.
+//  cost            Cost of the data used to compute the cache usage.
+//                  It doesn't have to be the size.
+//  delfunc         Function that the cache can use to free the data.
+void cache_add(cache_t *cache, const void *key, int keylen, void *data,
+               int cost, int (*delfunc)(void *data));
+// Return an item from the cache.
+// Returns
+//  The data owned by the cache, or NULL if no item with this key is in
+//  the cache.
+void *cache_get(cache_t *cache, const void *key, int keylen);
+
+// ####### Sound #################################
+void sound_init(void);
+void sound_play(const char *sound);
+void sound_iter(void);
+
+// Section: cycles
+void cycles_init(void);
+void cycles_release(void);
+void cycles_render(uint8_t *buffer, int *w, int *h, const camera_t *cam,
+                   float *progress);
+
+// Section: tests
+
+/* Function: tests_run
+ * Run all the unit tests */
+void tests_run(void);
+
 
 #endif // GOXEL_H

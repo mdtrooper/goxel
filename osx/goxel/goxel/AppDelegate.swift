@@ -44,15 +44,16 @@ class GoxNSOpenGLView: NSOpenGLView {
     }
     
     func mouseEvent(_ id: Int, _ state: Int, _ event: NSEvent) {
-        appDelegate().inputs.mouse_pos = vec2(
-            Float(event.locationInWindow.x),
-            Float(self.frame.height - event.locationInWindow.y))
-        
+        appDelegate().inputs.touches.0.pos.0 =
+            Float(event.locationInWindow.x);
+        appDelegate().inputs.touches.0.pos.1 =
+            Float(self.frame.height - event.locationInWindow.y);
+
         // XXX: find a way to make it work with unsage memory.
         switch (id) {
-        case 0: appDelegate().inputs.mouse_down.0 = (state != 0);
-        case 1: appDelegate().inputs.mouse_down.1 = (state != 0);
-        case 2: appDelegate().inputs.mouse_down.2 = (state != 0);
+        case 0: appDelegate().inputs.touches.0.down.0 = (state != 0);
+        case 1: appDelegate().inputs.touches.0.down.1 = (state != 0);
+        case 2: appDelegate().inputs.touches.0.down.2 = (state != 0);
         default: break;
         }
         // Force an update after a mousedown event to make sure that it will
@@ -79,6 +80,8 @@ class GoxNSOpenGLView: NSOpenGLView {
     
     override func keyDown(with event: NSEvent) {
         switch (event.keyCode) {
+            case 36: appDelegate().inputs.keys.257 = true
+            case 49: appDelegate().inputs.keys.32 = true
             case 51: appDelegate().inputs.keys.259 = true
             case 123: appDelegate().inputs.keys.263 = true
             case 124: appDelegate().inputs.keys.262 = true
@@ -95,6 +98,8 @@ class GoxNSOpenGLView: NSOpenGLView {
     
     override func keyUp(with event: NSEvent) {
         switch (event.keyCode) {
+            case 36: appDelegate().inputs.keys.257 = false
+            case 49: appDelegate().inputs.keys.32 = false
             case 51: appDelegate().inputs.keys.259 = false
             case 123: appDelegate().inputs.keys.263 = false
             case 124: appDelegate().inputs.keys.262 = false
@@ -140,13 +145,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
     
-    func onTimer(_ sender: Timer!) {
+    @objc func onTimer(_ sender: Timer!) {
         if (!window.isVisible) {
             return
         }
         glClear(GLbitfield(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT))
         self.inputs.window_size = (Int32(self.view.frame.size.width),
                                    Int32(self.view.frame.size.height))
+        self.inputs.scale = 1.0 // XXX: add support for retina screen!
         goxel_iter(&self.goxel, &self.inputs)
         goxel_render(&self.goxel)
         self.inputs.mouse_wheel = 0

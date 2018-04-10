@@ -24,12 +24,6 @@
 #   define DEBUG_ONLY(x)
 #endif
 
-// For the moment I put an implementation using GLFW3 and one using GLUT.
-// Both have some annoying problems, so I am not sure which one I should
-// keep.  By default I use GLFW3, which is the that works the best so far.
-
-#ifndef USE_GLUT
-
 #ifdef GLES2
 #   define GLFW_INCLUDE_ES2
 #endif
@@ -38,6 +32,7 @@
 static goxel_t      *g_goxel = NULL;
 static inputs_t     *g_inputs = NULL;
 static GLFWwindow   *g_window = NULL;
+static float        g_scale = 1;
 
 void on_scroll(GLFWwindow *win, double x, double y)
 {
@@ -59,7 +54,9 @@ void on_char(GLFWwindow *win, unsigned int c)
 
 typedef struct
 {
-    char    *args[1];
+    char *input;
+    char *export;
+    float scale;
 } args_t;
 
 #ifndef NO_ARGP
@@ -68,7 +65,12 @@ typedef struct
 const char *argp_program_version = "goxel " GOXEL_VERSION_STR;
 const char *argp_program_bug_address = "<guillaume@noctua-software.com>";
 static char doc[] = "A 3D voxels editor";
-static char args_doc[] = "[FILE]";
+static char args_doc[] = "[INPUT]";
+static struct argp_option options[] = {
+    {"export",   'e', "FILENAME", 0, "Export the model to a file" },
+    {"scale",    's', "FLOAT", 0, "Set UI scale (for retina display)"},
+    {},
+};
 
 /* Parse a single option. */
 static error_t parse_opt(int key, char *arg, struct argp_state *state)
@@ -77,10 +79,16 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
 
     switch (key)
     {
+    case 'e':
+        args->export = arg;
+        break;
+    case 's':
+        args->scale = atof(arg);
+        break;
     case ARGP_KEY_ARG:
         if (state->arg_num >= 1)
             argp_usage(state);
-        args->args[state->arg_num] = arg;
+        args->input = arg;
         break;
     case ARGP_KEY_END:
         break;
@@ -91,7 +99,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state)
 }
 
 /* Our argp parser. */
-static struct argp argp = { NULL, parse_opt, args_doc, doc };
+static struct argp argp = { options, parse_opt, args_doc, doc };
 #endif
 
 static void loop_function(void) {
@@ -99,33 +107,41 @@ static void loop_function(void) {
     int fb_size[2], win_size[2];
     int i;
     double xpos, ypos;
+    float scale = g_scale;
 
-    GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
+    if (    !glfwGetWindowAttrib(g_window, GLFW_VISIBLE) ||
+             glfwGetWindowAttrib(g_window, GLFW_ICONIFIED)) {
+        glfwWaitEvents();
+        goto end;
+    }
     // The input struct gets all the values in framebuffer coordinates,
     // On retina display, this might not be the same as the window
     // size.
-    glfwGetFramebufferSize(g_window, &fb_size[0], &fb_size[1]);
     glfwGetWindowSize(g_window, &win_size[0], &win_size[1]);
-    g_inputs->window_size[0] = fb_size[0];
-    g_inputs->window_size[1] = fb_size[1];
+    glfwGetFramebufferSize(g_window, &fb_size[0], &fb_size[1]);
+    g_inputs->window_size[0] = win_size[0] / scale;
+    g_inputs->window_size[1] = win_size[1] / scale;
+    g_inputs->scale = fb_size[0] / win_size[0] * scale;
+
+    GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
 
     for (i = 0; i <= GLFW_KEY_LAST; i++) {
         g_inputs->keys[i] = glfwGetKey(g_window, i) == GLFW_PRESS;
     }
     glfwGetCursorPos(g_window, &xpos, &ypos);
-    g_inputs->mouse_pos = vec2(xpos * fb_size[0] / win_size[0],
-                            ypos * fb_size[1] / win_size[1]);
-    g_inputs->mouse_down[0] =
+    vec2_set(g_inputs->touches[0].pos, xpos / scale, ypos / scale);
+    g_inputs->touches[0].down[0] =
         glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-    g_inputs->mouse_down[1] =
+    g_inputs->touches[0].down[1] =
         glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
-    g_inputs->mouse_down[2] =
+    g_inputs->touches[0].down[2] =
         glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     goxel_iter(g_goxel, g_inputs);
     goxel_render(g_goxel);
 
     memset(g_inputs, 0, sizeof(*g_inputs));
     glfwSwapBuffers(g_window);
+end:
     glfwPollEvents();
 }
 
@@ -145,24 +161,58 @@ static void start_main_loop(void (*func)(void))
 }
 #endif
 
+#if GLFW_VERSION_MAJOR >= 3 && GLFW_VERSION_MINOR >= 2
+
+static void load_icon(GLFWimage *image, const char *path)
+{
+    uint8_t *img;
+    int w, h, bpp = 0;
+    img = img_read(path, &w, &h, &bpp);
+    assert(img);
+    assert(bpp == 4);
+    image->width = w;
+    image->height = h;
+    image->pixels = img;
+}
+
+static void set_window_icon(GLFWwindow *window)
+{
+    GLFWimage icons[7];
+    int i;
+    load_icon(&icons[0], "asset://data/icons/icon16.png");
+    load_icon(&icons[1], "asset://data/icons/icon24.png");
+    load_icon(&icons[2], "asset://data/icons/icon32.png");
+    load_icon(&icons[3], "asset://data/icons/icon48.png");
+    load_icon(&icons[4], "asset://data/icons/icon64.png");
+    load_icon(&icons[5], "asset://data/icons/icon128.png");
+    load_icon(&icons[6], "asset://data/icons/icon256.png");
+    glfwSetWindowIcon(window, 7, icons);
+    for (i = 0; i < 7; i++) free(icons[i].pixels);
+}
+
+#else
+static void set_window_icon(GLFWwindow *window) {}
+#endif
+
 int main(int argc, char **argv)
 {
-    args_t args = {};
+    args_t args = {.scale = 1};
     GLFWwindow *window;
     GLFWmonitor *monitor;
     const GLFWvidmode *mode;
+    int ret = 0;
     inputs_t inputs = {};
     const char *title = "Goxel " GOXEL_VERSION_STR DEBUG_ONLY(" (debug)");
-
     g_inputs = &inputs;
     g_goxel = calloc(1, sizeof(*g_goxel));
 
 #ifndef NO_ARGP
     argp_parse (&argp, argc, argv, 0, 0, &args);
 #endif
+    g_scale = args.scale;
 
     glfwInit();
-    glfwWindowHint(GLFW_SAMPLES, 2);
+    // glfwWindowHint(GLFW_SAMPLES, 4); Should we use that?
     monitor = glfwGetPrimaryMonitor();
     mode = glfwGetVideoMode(monitor);
     window = glfwCreateWindow(mode->width, mode->height, title, NULL, NULL);
@@ -171,155 +221,28 @@ int main(int argc, char **argv)
     glfwSetScrollCallback(window, on_scroll);
     glfwSetCharCallback(window, on_char);
     glfwSetInputMode(window, GLFW_STICKY_MOUSE_BUTTONS, false);
+    set_window_icon(window);
+
 #ifdef WIN32
     glewInit();
 #endif
-
     goxel_init(g_goxel);
-    if (args.args[0]) {
-        if (str_endswith(args.args[0], ".qb"))
-            qubicle_import(args.args[0]);
-        else if (str_endswith(args.args[0], ".vox"))
-            vox_import(args.args[0]);
-        else
-            load_from_file(g_goxel, args.args[0]);
-    }
+    // Run the unit tests in debug.
+    if (DEBUG) tests_run();
 
-    start_main_loop(loop_function);
-    goxel_release(g_goxel);
-    return 0;
-}
-
-#else // GLUT implementation
-
-#ifdef __APPLE__
-#   include <GLUT/glut.h>
-#else
-#   include <GL/glut.h>
-#endif
-
-
-static goxel_t  *g_goxel = NULL;
-static inputs_t *g_inputs = NULL;
-
-static const int KEYS[] = {
-    [GLUT_KEY_RIGHT]        = KEY_RIGHT,
-    [GLUT_KEY_LEFT]         = KEY_LEFT,
-    [GLUT_KEY_DOWN]         = KEY_DOWN,
-    [GLUT_KEY_UP]           = KEY_UP,
-};
-
-static void on_display(void)
-{
-}
-
-static void on_reshape(GLint width, GLint height)
-{
-    g_inputs->window_size[0] = width;
-    g_inputs->window_size[1] = height;
-}
-
-static void set_modifiers(void)
-{
-    int v = glutGetModifiers();
-    g_inputs->keys[KEY_SHIFT] = v & GLUT_ACTIVE_SHIFT;
-    g_inputs->keys[KEY_CONTROL] = v & GLUT_ACTIVE_CTRL;
-}
-
-static void on_key_down(unsigned char key, int x, int y)
-{
-    int i;
-    for (i = 0; i < ARRAY_SIZE(g_inputs->chars); i++) {
-        if (!g_inputs->chars[i]) {
-            g_inputs->chars[i] = key;
-            break;
+    if (args.input)
+        action_exec2("import", "p", args.input);
+    if (args.export) {
+        if (!args.input) {
+            LOG_E("trying to export an empty image");
+            ret = -1;
+        } else {
+            ret = action_exec2("export", "p", args.export);
         }
+        goto end;
     }
-    set_modifiers();
+    start_main_loop(loop_function);
+end:
+    goxel_release(g_goxel);
+    return ret;
 }
-
-static void on_key_up(unsigned char key, int x, int y)
-{
-    set_modifiers();
-}
-
-static void on_special_key_down(int key, int x, int y)
-{
-    if (key < ARRAY_SIZE(KEYS))
-        g_inputs->keys[KEYS[key]] = true;
-}
-
-static void on_special_key_up(int key, int x, int y)
-{
-    if (key < ARRAY_SIZE(KEYS))
-        g_inputs->keys[KEYS[key]] = false;
-}
-
-static void on_mouse_button(int button, int state, int x, int y)
-{
-    if (button < 3) {
-        g_inputs->mouse_pos = vec2(x, y);
-        g_inputs->mouse_down[button] = state == GLUT_DOWN;
-    }
-    if (button == 3 && state == GLUT_DOWN)
-        g_inputs->mouse_wheel = +1;
-    if (button == 4 && state == GLUT_DOWN)
-        g_inputs->mouse_wheel = -1;
-    set_modifiers();
-}
-
-static void on_mouse_motion(int x, int y)
-{
-    g_inputs->mouse_pos = vec2(x, y);
-}
-
-static void on_passive_motion(int x, int y)
-{
-    g_inputs->mouse_pos = vec2(x, y);
-}
-
-static void on_timer(int value)
-{
-    GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
-    goxel_iter(g_goxel, g_inputs);
-    g_inputs->mouse_wheel = 0;
-    memset(g_inputs->chars, 0, sizeof(g_inputs->chars));
-    goxel_render(g_goxel);
-    glutSwapBuffers();
-    glutTimerFunc(10, on_timer, 0);
-}
-
-int main(int argc, char **argv)
-{
-    int w = 640;
-    int h = 480;
-    goxel_t goxel;
-    inputs_t inputs;
-
-    g_goxel = &goxel;
-    g_inputs = &inputs;
-    memset(g_inputs, 0, sizeof(*g_inputs));
-
-    glutInit(&argc, argv);
-    glutInitWindowSize(w, h);
-    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE | GLUT_DEPTH);
-    glutCreateWindow("Goxel " GOXEL_VERSION_STR);
-
-    goxel_init(&goxel);
-
-    glutDisplayFunc(on_display);
-    glutReshapeFunc(on_reshape);
-    glutKeyboardFunc(on_key_down);
-    glutKeyboardUpFunc(on_key_up);
-    glutSpecialFunc(on_special_key_down);
-    glutSpecialUpFunc(on_special_key_up);
-    glutMouseFunc(on_mouse_button);
-    glutMotionFunc(on_mouse_motion);
-    glutPassiveMotionFunc(on_passive_motion);
-    glutTimerFunc(10, on_timer, 0);
-
-    glutMainLoop();
-    return 0;
-}
-
-#endif

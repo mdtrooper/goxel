@@ -9,44 +9,67 @@ import sys
 target_os = str(Platform())
 
 debug = int(ARGUMENTS.get('debug', 1))
-gprof = int(ARGUMENTS.get('gprof', 0))
+profile = int(ARGUMENTS.get('profile', 0))
 glut = int(ARGUMENTS.get('glut', 0))
 emscripten = ARGUMENTS.get('emscripten', 0)
+werror = int(ARGUMENTS.get("werror", 1))
+clang = int(ARGUMENTS.get("clang", 0))
+argp_standalone = int(ARGUMENTS.get("argp_standalone", 0))
+sound = False
 
-if gprof: debug = 0
+if os.environ.get('CC') == 'clang': clang = 1
+if profile: debug = 0
 if emscripten: target_os = 'js'
 
 env = Environment(ENV = os.environ)
+conf = env.Configure()
+
+if clang:
+    env.Replace(CC='clang', CXX='clang++')
 
 # Asan & Ubsan (need to come first).
 if debug and target_os == 'posix':
     env.Append(CCFLAGS=['-fsanitize=address', '-fsanitize=undefined'],
-               LIBS=['asan', 'ubsan'])
+               LINKFLAGS=['-fsanitize=address', '-fsanitize=undefined'])
+    if not clang:
+        env.Append(LIBS=['asan', 'ubsan'])
 
-env.Append(CFLAGS= '-Wall -Werror -std=gnu99 -Wno-unknown-pragmas',
-           CXXFLAGS='-std=gnu++11 -Wall -Werror -Wno-narrowing '
-                    '-Wno-unknown-pragmas'
+env.Append(CFLAGS= '-Wall -std=gnu99 -Wno-unknown-pragmas '
+                   '-Wno-unknown-warning-option',
+           CXXFLAGS='-std=gnu++11 -Wall -Wno-narrowing '
+                    '-Wno-unknown-pragmas -Wno-unused-function'
         )
 
-if debug:
-    env.Append(CCFLAGS='-g')
-else:
-    env.Append(CCFLAGS='-O3 -DNDEBUG -D_FORTIFY_SOURCE=2')
+if werror:
+    env.Append(CCFLAGS='-Werror')
 
-if gprof:
-    env.Append(CCFLAGS='-pg', LINKFLAGS='-pg')
+if debug:
+    if env['CC'] == 'gcc':
+        env.Append(CFLAGS='-Og')
+else:
+    env.Append(CCFLAGS='-Ofast -DNDEBUG')
+
+if profile or debug:
+    env.Append(CCFLAGS='-g')
 
 env.Append(CPPPATH=['src'])
 
-sources = glob.glob('src/*.c') + glob.glob('src/*.cpp')
+sources = glob.glob('src/*.c') + glob.glob('src/*.cpp') + \
+          glob.glob('src/formats/*.c') + \
+          glob.glob('src/tools/*.c')
 
 if target_os == 'posix':
     env.Append(LIBS=['GL', 'm', 'z'])
+    if not conf.CheckDeclaration('__GLIBC__', includes='#include <features.h>'):
+        env.Append(LIBS=['argp'])
     # Note: add '--static' to link with all the libs needed by glfw3.
     env.ParseConfig('pkg-config --libs glfw3')
 
 if glut:
     env.Append(CCFLAGS='-DUSE_GLUT=1', LIBS='glut')
+
+if argp_standalone:
+    env.Append(LIBS='argp')
 
 if target_os == 'msys':
     env.Append(CCFLAGS='-DNO_ARGP')
@@ -63,9 +86,50 @@ env.Append(CPPPATH=['ext_src/uthash'])
 env.Append(CPPPATH=['ext_src/stb'])
 env.Append(CPPPATH=['ext_src/noc'])
 
+if conf.CheckLib('libpng'):
+    env.Append(CCFLAGS='-DHAVE_LIBPNG=1')
+
 sources += glob.glob('ext_src/imgui/*.cpp')
 env.Append(CPPPATH=['ext_src/imgui'])
 env.Append(CXXFLAGS='-DIMGUI_INCLUDE_IMGUI_USER_INL')
+
+sources += glob.glob('ext_src/inih/*.c')
+env.Append(CPPPATH=['ext_src/inih'])
+env.Append(CFLAGS='-DINI_HANDLER_LINENO=1')
+
+# Cycles rendering support.
+sources += glob.glob('ext_src/cycles/src/util/*.cpp')
+sources = [x for x in sources if not x.endswith('util_view.cpp')]
+sources += glob.glob('ext_src/cycles/src/bvh/*.cpp')
+sources += glob.glob('ext_src/cycles/src/render/*.cpp')
+sources += glob.glob('ext_src/cycles/src/graph/*.cpp')
+sources = [x for x in sources if not x.endswith('node_xml.cpp')]
+
+sources += glob.glob('ext_src/cycles/src/device/device.cpp')
+sources += glob.glob('ext_src/cycles/src/device/device_cpu.cpp')
+sources += glob.glob('ext_src/cycles/src/device/device_memory.cpp')
+sources += glob.glob('ext_src/cycles/src/device/device_denoising.cpp')
+sources += glob.glob('ext_src/cycles/src/device/device_split_kernel.cpp')
+sources += glob.glob('ext_src/cycles/src/device/device_task.cpp')
+
+sources += glob.glob('ext_src/cycles/src/kernel/kernels/cpu/*.cpp')
+sources += glob.glob('ext_src/cycles/src/subd/*.cpp')
+
+env.Append(CPPPATH=['ext_src/cycles/src'])
+env.Append(CPPPATH=['ext_src/cycles/third_party/atomic'])
+env.Append(CPPFLAGS=[
+    '-DCYCLES_STD_UNORDERED_MAP',
+    '-DCCL_NAMESPACE_BEGIN=namespace ccl {',
+    '-DCCL_NAMESPACE_END=}',
+    '-DWITH_CUDA_DYNLOAD',
+    '-DWITHOUT_OPENIMAGEIO',
+    '-DWITH_GLEW_MX',
+])
+env.Append(CPPFLAGS=['-Wno-sign-compare', '-Wno-strict-aliasing',
+                     '-Wno-uninitialized'])
+if clang:
+    env.Append(CPPFLAGS=['-Wno-overloaded-virtual'])
+
 
 if target_os == 'posix':
     env.ParseConfig('pkg-config --cflags --libs gtk+-3.0')
@@ -92,5 +156,16 @@ if target_os == 'js':
     env.Append(CCFLAGS=['-DGLES2 1', '-DNO_ZLIB', '-DNO_ARGP'] + flags)
     env.Append(LINKFLAGS=flags)
     env.Append(LIBS=['GL'])
+
+if sound:
+    env.Append(LIBS='openal')
+    env.Append(CCFLAGS='-DSOUND=OPENAL')
+
+# Append external environment flags
+env.Append(
+    CFLAGS=os.environ.get("CFLAGS", "").split(),
+    CXXFLAGS=os.environ.get("CXXFLAGS", "").split(),
+    LINKFLAGS=os.environ.get("LDFLAGS", "").split()
+)
 
 env.Program(target='goxel', source=sources)
