@@ -66,7 +66,7 @@ def gox_to_json(filename):
             #~ for b in iter(lambda: f.read(1), b''):
                 #~ print(b, end='')
     except FileNotFoundError as e:
-        print('ERROR: File "{}" not found.'.format(filename)
+        print('ERROR: File "{}" not found.'.format(filename))
         exit(1)
 
 if __name__ == "__main__":
