@@ -10,6 +10,7 @@ __license__ = "GPL"
 from sys import argv
 from os import stat
 from os.path import isfile
+from subprocess import run
 
 def help():
     print("Usage: {command} [arguments] file.gox".format(command=argv[0]))
@@ -37,9 +38,24 @@ def main():
         help()
         exit(1)
 
+def read_dict_from_data(data):
+    size = int.from_bytes(data[:4], byteorder='little')
+    data = data[4:]
+    
+    key = data[:size].decode()
+    data = data[size:]
+    
+    size = int.from_bytes(data[:4], byteorder='little')
+    data = data[4:]
+    
+    value = data[:size]
+    data = data[size:]
+    
+    return data, {key: value}
+
 def gox_to_json(filename):
     file_dict = {}
-    
+    file_dict['goxel_version'] = '0.7.3'
     try:
         with open(filename, 'rb') as f:
             file_dict['magic_string'] = f.read(4).decode()
@@ -62,29 +78,62 @@ def gox_to_json(filename):
                     raise Exception('Chunk is malformed')
                 
                 chunk['type'] = buff.decode().strip()
-                chunk['length'] = int.from_bytes(f.read(4), byteorder='little') 
-                data = f.read(chunk['length'])
-                chunk['crc'] = int.from_bytes(f.read(4), byteorder='little')
+                size = int.from_bytes(f.read(4), byteorder='little')
+                data = f.read(size)
+                crc = int.from_bytes(f.read(4), byteorder='little')
                 
                 if chunk['type'] == 'IMG':
-                    pass
+                    chunk['data'] = []
+                    while len(data) > 0:
+                        data, data_dict = read_dict_from_data(data)
+                        chunk['data'].append(data_dict)
                 if chunk['type'] == 'PREV':
-                    pass
+                    chunk['data'] = data
                 if chunk['type'] == 'BL16':
-                    pass
+                    chunk['data'] = data
                 if chunk['type'] == 'LAYR':
-                    pass
+                    num_blocks = int.from_bytes(data[:4], byteorder='little')
+                    print('num blocks {}'.format(num_blocks))
+                    data = data[4:]
+                    
+                    chunk['blocks'] = []
+                    count_blocks = 0
+                    while count_blocks < num_blocks:
+                        index = int.from_bytes(data[:4], byteorder='little')
+                        data = data[4:]
+                        x = int.from_bytes(data[:4], byteorder='little')
+                        data = data[4:]
+                        y = int.from_bytes(data[:4], byteorder='little')
+                        data = data[4:]
+                        z = int.from_bytes(data[:4], byteorder='little')
+                        data = data[4:]
+                        
+                        data = data[4:] # Move a int32 ahead
+                        
+                        # TODO: Get the v from BL16
+                        
+                        chunk['blocks'].append({'x': x, 'y': y, 'z': z, 'v': None})
+                        count_blocks += 1
+                    
+                    chunk['data'] = []
+                    while len(data) > 0:
+                        data, data_dict = read_dict_from_data(data)
+                        key = list(data_dict.keys())[0]
+                        if key in ['id', 'base_id']:
+                            data_dict[key] = int.from_bytes(data_dict[key], byteorder='little')
+                        if key in ['name']:
+                            data_dict[key] = data_dict[key].decode()
+                        chunk['data'].append(data_dict)
                 if chunk['type'] == 'CAMR':
-                    pass
-                
-                print("Type: '{}'".format(chunk['type']))
-                print("Chunk size: " + str(chunk['length']))
-                print("Chunk data('{}'): '{}'".format(len(data), data))
-                print("Chunk crc: " + str(chunk['crc']))
+                    chunk['data'] = data
+                print('"{}"'.format(chunk['type']))
                 file_dict['chunks'].append(chunk)
     except FileNotFoundError as e:
         print('ERROR: File "{}" not found.'.format(filename))
         exit(1)
+    
+    import pprint
+    pprint.pprint(file_dict)
 
 if __name__ == "__main__":
     main()
