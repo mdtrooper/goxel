@@ -11,6 +11,7 @@ from sys import argv
 from os import stat
 from os.path import isfile
 from subprocess import run
+from struct import unpack
 
 def help():
     print("Usage: {command} [arguments] file.gox".format(command=argv[0]))
@@ -93,7 +94,6 @@ def gox_to_json(filename):
                     chunk['data'] = data
                 if chunk['type'] == 'LAYR':
                     num_blocks = int.from_bytes(data[:4], byteorder='little')
-                    print('num blocks {}'.format(num_blocks))
                     data = data[4:]
                     
                     chunk['blocks'] = []
@@ -101,6 +101,8 @@ def gox_to_json(filename):
                     while count_blocks < num_blocks:
                         index = int.from_bytes(data[:4], byteorder='little')
                         data = data[4:]
+                        _x,_y,_z = unpack('<iii', data[:4*3])
+                        print(_x,_y,_z)
                         x = int.from_bytes(data[:4], byteorder='little')
                         data = data[4:]
                         y = int.from_bytes(data[:4], byteorder='little')
@@ -125,8 +127,23 @@ def gox_to_json(filename):
                             data_dict[key] = data_dict[key].decode()
                         chunk['data'].append(data_dict)
                 if chunk['type'] == 'CAMR':
-                    chunk['data'] = data
-                print('"{}"'.format(chunk['type']))
+                    chunk['cameras'] = []
+                    while len(data) > 0:
+                        data, data_dict = read_dict_from_data(data)
+                        key = list(data_dict.keys())[0]
+                        if key in ['dist']:
+                            data_dict[key] = unpack('f', data_dict[key])[0]
+                        if key in ['name']:
+                            data_dict[key] = data_dict[key].decode()
+                        if key in ['active']:
+                            data_dict[key] = 1
+                        if key in ['rot', 'ofs']:
+                            array_value = []
+                            while len(data_dict[key]) > 0:
+                                array_value.append(unpack('f', data_dict[key][:4])[0])
+                                data_dict[key] = data_dict[key][4:]
+                            data_dict[key] = array_value
+                        chunk['cameras'].append(data_dict)
                 file_dict['chunks'].append(chunk)
     except FileNotFoundError as e:
         print('ERROR: File "{}" not found.'.format(filename))
