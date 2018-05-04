@@ -40,13 +40,13 @@ def main():
         exit(1)
 
 def read_dict_from_data(data):
-    size = int.from_bytes(data[:4], byteorder='little')
+    size, *_ = unpack('<i', data[:4])
     data = data[4:]
     
     key = data[:size].decode()
     data = data[size:]
     
-    size = int.from_bytes(data[:4], byteorder='little')
+    size, *_ = unpack('<i', data[:4])
     data = data[4:]
     
     value = data[:size]
@@ -65,7 +65,7 @@ def gox_to_json(filename):
                 print('ERROR: The file is not a gox file.')
                 exit(1)
             
-            file_dict['version'] = int.from_bytes(f.read(4), byteorder='little')
+            file_dict['version'] , *_ = unpack('<i', f.read(4))
             
             # READ CHUNKS
             file_dict['chunks'] = []
@@ -79,9 +79,9 @@ def gox_to_json(filename):
                     raise Exception('Chunk is malformed')
                 
                 chunk['type'] = buff.decode().strip()
-                size = int.from_bytes(f.read(4), byteorder='little')
+                size, *_ = unpack('<i', f.read(4))
                 data = f.read(size)
-                crc = int.from_bytes(f.read(4), byteorder='little')
+                crc, *_ = unpack('<i', f.read(4))
                 
                 if chunk['type'] == 'IMG':
                     chunk['data'] = []
@@ -93,22 +93,17 @@ def gox_to_json(filename):
                 if chunk['type'] == 'BL16':
                     chunk['data'] = data
                 if chunk['type'] == 'LAYR':
-                    num_blocks = int.from_bytes(data[:4], byteorder='little')
+                    num_blocks, *_ = unpack('<i', data[:4])
                     data = data[4:]
                     
                     chunk['blocks'] = []
                     count_blocks = 0
                     while count_blocks < num_blocks:
-                        index = int.from_bytes(data[:4], byteorder='little')
+                        index, *_ = unpack('<i', data[:4])
                         data = data[4:]
-                        _x,_y,_z = unpack('<iii', data[:4*3])
-                        print(_x,_y,_z)
-                        x = int.from_bytes(data[:4], byteorder='little')
-                        data = data[4:]
-                        y = int.from_bytes(data[:4], byteorder='little')
-                        data = data[4:]
-                        z = int.from_bytes(data[:4], byteorder='little')
-                        data = data[4:]
+                        
+                        x, y, z = unpack('<iii', data[:4*3])
+                        data = data[4*3:]
                         
                         data = data[4:] # Move a int32 ahead
                         
@@ -122,28 +117,25 @@ def gox_to_json(filename):
                         data, data_dict = read_dict_from_data(data)
                         key = list(data_dict.keys())[0]
                         if key in ['id', 'base_id']:
-                            data_dict[key] = int.from_bytes(data_dict[key], byteorder='little')
+                            data_dict[key] , *_ = unpack('<i', data_dict[key])
                         if key in ['name']:
                             data_dict[key] = data_dict[key].decode()
                         chunk['data'].append(data_dict)
                 if chunk['type'] == 'CAMR':
-                    chunk['cameras'] = []
+                    chunk['active'] = 0
                     while len(data) > 0:
                         data, data_dict = read_dict_from_data(data)
                         key = list(data_dict.keys())[0]
                         if key in ['dist']:
-                            data_dict[key] = unpack('f', data_dict[key])[0]
+                            chunk[key] = unpack('f', data_dict[key])[0]
                         if key in ['name']:
-                            data_dict[key] = data_dict[key].decode()
+                            chunk[key] = data_dict[key].decode()
                         if key in ['active']:
-                            data_dict[key] = 1
-                        if key in ['rot', 'ofs']:
-                            array_value = []
-                            while len(data_dict[key]) > 0:
-                                array_value.append(unpack('f', data_dict[key][:4])[0])
-                                data_dict[key] = data_dict[key][4:]
-                            data_dict[key] = array_value
-                        chunk['cameras'].append(data_dict)
+                            chunk[key] = 1
+                        if key in ['rot']:
+                            chunk[key] = unpack('ffff', data_dict[key][:4*4])
+                        if key in ['ofs']:
+                            chunk[key] = unpack('fff', data_dict[key][:4*3])
                 file_dict['chunks'].append(chunk)
     except FileNotFoundError as e:
         print('ERROR: File "{}" not found.'.format(filename))
