@@ -84,10 +84,13 @@ def gox_to_json(filename):
                 crc, *_ = unpack('<i', f.read(4))
                 
                 if chunk['type'] == 'IMG':
-                    chunk['data'] = []
                     while len(data) > 0:
                         data, data_dict = read_dict_from_data(data)
-                        chunk['data'].append(data_dict)
+                        key = list(data_dict.keys())[0]
+                        chunk[key] = []
+                        for i in range(0, 4):
+                            chunk[key].append(unpack('ffff', data_dict[key][:4*4]))
+                            data_dict[key] = data_dict[key][4*4:]
                 if chunk['type'] == 'PREV':
                     chunk['data'] = data
                 if chunk['type'] == 'BL16':
