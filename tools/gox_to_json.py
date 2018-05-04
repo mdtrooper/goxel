@@ -91,6 +91,8 @@ def gox_to_json(filename):
                 if chunk['type'] == 'PREV':
                     chunk['data'] = data
                 if chunk['type'] == 'BL16':
+                    print("")
+                    print("{} {}".format(len(data), data))
                     # PNG Header
                     eightynine, *_ = unpack('c', data[:1])
                     data = data[1:]
@@ -101,6 +103,7 @@ def gox_to_json(filename):
                     
                     while len(data) > 0:
                         size_png_chunk, *_ = unpack('>i', data[:4])
+                        print("{}".format(size_png_chunk))
                         data = data[4:]
                         type_png_chunk = data[:4].decode().strip()
                         data = data[4:]
@@ -149,6 +152,12 @@ def gox_to_json(filename):
                             data_dict[key] , *_ = unpack('<i', data_dict[key])
                         if key in ['name']:
                             data_dict[key] = data_dict[key].decode()
+                        if key in ['mat']:
+                            data_mat = data_dict[key]
+                            data_dict[key] = []
+                            for i in range(0, 4):
+                                data_dict[key].append(unpack('ffff', data_mat[:4*4]))
+                                data_mat = data_mat[4*4:]
                         chunk['data'].append(data_dict)
                 if chunk['type'] == 'CAMR':
                     chunk['active'] = 0
