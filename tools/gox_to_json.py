@@ -41,8 +41,6 @@ def gox_to_json(filename):
     file_dict = {}
     
     try:
-        file_dict['size'] = stat(filename).st_size
-            
         with open(filename, 'rb') as f:
             file_dict['magic_string'] = f.read(4).decode()
             
@@ -50,21 +48,40 @@ def gox_to_json(filename):
                 print('ERROR: The file is not a gox file.')
                 exit(1)
             
-            file_dict['version'] = f.read(4)[0]
+            file_dict['version'] = int.from_bytes(f.read(4), byteorder='little')
             
             # READ CHUNKS
-            reverse_count = file_dict['size'] - 4 -4 # size - magic_string (4bytes) - version (4bytes)
-            
             file_dict['chunks'] = []
-            while reverse_count > 0:
+            while True:
                 chunk = {}
-                chunk['length'] = f.read(4).decode()
-                chunk['type'] = f.read(4).decode()
                 
+                buff = f.read(4)
+                if len(buff) == 0: # End of file
+                    break
+                if len(buff) < 4: # Error
+                    raise Exception('Chunk is malformed')
+                
+                chunk['type'] = buff.decode().strip()
+                chunk['length'] = int.from_bytes(f.read(4), byteorder='little') 
+                data = f.read(chunk['length'])
+                chunk['crc'] = int.from_bytes(f.read(4), byteorder='little')
+                
+                if chunk['type'] == 'IMG':
+                    pass
+                if chunk['type'] == 'PREV':
+                    pass
+                if chunk['type'] == 'BL16':
+                    pass
+                if chunk['type'] == 'LAYR':
+                    pass
+                if chunk['type'] == 'CAMR':
+                    pass
+                
+                print("Type: '{}'".format(chunk['type']))
+                print("Chunk size: " + str(chunk['length']))
+                print("Chunk data('{}'): '{}'".format(len(data), data))
+                print("Chunk crc: " + str(chunk['crc']))
                 file_dict['chunks'].append(chunk)
-            
-            #~ for b in iter(lambda: f.read(1), b''):
-                #~ print(b, end='')
     except FileNotFoundError as e:
         print('ERROR: File "{}" not found.'.format(filename))
         exit(1)
