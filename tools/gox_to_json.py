@@ -91,7 +91,36 @@ def gox_to_json(filename):
                 if chunk['type'] == 'PREV':
                     chunk['data'] = data
                 if chunk['type'] == 'BL16':
-                    chunk['data'] = data
+                    # PNG Header
+                    eightynine, *_ = unpack('c', data[:1])
+                    data = data[1:]
+                    png, *_ = unpack('3s', data[:3])
+                    data = data[3:]
+                    _ = unpack('4c', data[:4])
+                    data = data[4:]
+                    
+                    while len(data) > 0:
+                        size_png_chunk, *_ = unpack('>i', data[:4])
+                        data = data[4:]
+                        type_png_chunk = data[:4].decode().strip()
+                        data = data[4:]
+                        data_png_chunk = data[:size_png_chunk]
+                        data = data[size_png_chunk:]
+                        crc_png_chunk, *_ = unpack('<I', data[:4])
+                        data = data[4:]
+                        if type_png_chunk == 'IHDR':
+                            width_png, *_ = unpack('>i', data_png_chunk[:4])
+                            data_png_chunk = data_png_chunk[4:]
+                            height_png, *_ = unpack('>i', data_png_chunk[:4])
+                            data_png_chunk = data_png_chunk[4:]
+                            bit_pixel_png, *_ = unpack('b', data_png_chunk[:1])
+                        if type_png_chunk == 'IDAT':
+                            chunk['data'] = data_png_chunk
+                            if 'index' not in locals():
+                                index = 0
+                            else:
+                                index += 1
+                            chunk['index'] = index
                 if chunk['type'] == 'LAYR':
                     num_blocks, *_ = unpack('<i', data[:4])
                     data = data[4:]
@@ -109,7 +138,7 @@ def gox_to_json(filename):
                         
                         # TODO: Get the v from BL16
                         
-                        chunk['blocks'].append({'x': x, 'y': y, 'z': z, 'v': None})
+                        chunk['blocks'].append({'index': index, 'x': x, 'y': y, 'z': z, 'v': None})
                         count_blocks += 1
                     
                     chunk['data'] = []
