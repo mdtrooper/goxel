@@ -36,10 +36,6 @@ static size_t gzread(gzFile file, void *buff, size_t size) {
     return fread(buff, size, 1, file);
 }
 static size_t gzwrite(gzFile file, const void *buff, size_t size) {
-    char * debug_str = memtohex(buff, size);
-    LOG_E(">>%s<<", debug_str);
-    free(debug_str);
-
     return fwrite(buff, size, 1, file);
 }
 static int gzeof(gzFile file) {return feof(file);}
@@ -226,26 +222,6 @@ static void chunk_write_all(gzFile out, const char *type,
     write_int32(out, size);
     gzwrite(out, data, size);
     write_int32(out, 0);        // CRC XXX: todo.
-}
-
-char *memtohex(const char *buff, size_t size)
-{
-    char *return_var = NULL;
-    char *temp = NULL;
-    
-    return_var = calloc(1, CHUNK_BUFF_SIZE);
-    temp = calloc(1, CHUNK_BUFF_SIZE);
-    
-    for (int i = 0; i < size; i++)
-    {
-        sprintf(temp, "%02X", buff[i]);
-    }
-    
-    strcat(return_var, temp);
-    
-    free(temp);
-    
-    return return_var;
 }
 
 void save_to_file(goxel_t *goxel, const char *path, bool with_preview)
