@@ -7,6 +7,9 @@ all:
 release:
 	scons debug=0
 
+debug:
+	scons debug=1
+
 profile:
 	scons profile=1
 

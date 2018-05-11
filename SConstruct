@@ -44,7 +44,8 @@ if werror:
     env.Append(CCFLAGS='-Werror')
 
 if debug:
-    if env['CC'] == 'gcc':
+    if env['CC'] == 'gcc' or env['CC'] == 'g++':
+        env.Append(CFLAGS='-O0')
         env.Append(CFLAGS='-Og')
 else:
     env.Append(CCFLAGS='-Ofast -DNDEBUG')
