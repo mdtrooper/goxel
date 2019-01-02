@@ -17,126 +17,43 @@
  */
 
 #include "goxel.h"
+#include <sys/time.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <errno.h>
 
-#ifdef __linux__
+#ifndef PATH_MAX
+#define PATH_MAX 1024
+#endif
+
+// The global system instance.
+sys_callbacks_t sys_callbacks = {};
+
+#if defined(__unix__) && !defined(__EMSCRIPTEN__) && !defined(ANDROID)
 #define NOC_FILE_DIALOG_GTK
 #define NOC_FILE_DIALOG_IMPLEMENTATION
 #include "noc_file_dialog.h"
-#endif
-
-#ifdef WIN32
-#define NOC_FILE_DIALOG_WIN32
-#define NOC_FILE_DIALOG_IMPLEMENTATION
-#include "noc_file_dialog.h"
-#endif
-
-void sys_log(const char *msg)
-{
-    printf("%s\n", msg);
-    fflush(stdout);
-}
-
-const char *sys_get_data_dir(void)
-{
-    return "./user_data";
-}
-
-#ifndef __APPLE__
-
-bool sys_asset_exists(const char *path)
-{
-    FILE *file;
-    file = fopen(path, "r");
-    if (file)
-        fclose(file);
-    return (bool)file;
-}
-
-
-
-char *sys_read_asset(const char *path, int *size)
-{
-    FILE *file;
-    int read_size __attribute__((unused));
-    char *ret;
-    int default_size;
-    size = size ?: &default_size;
-
-    file = fopen(path, "rb");
-    if (!file) LOG_E("cannot file file %s", path);
-    assert(file);
-    fseek(file, 0, SEEK_END);
-    *size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    ret = malloc(*size + 1);
-    read_size = fread(ret, *size, 1, file);
-    assert(read_size == 1 || *size == 0);
-    fclose(file);
-    ret[*size] = '\0';
-    return ret;
-}
-
-#else
-#include <CoreFoundation/CoreFoundation.h>
-
-bool sys_asset_exists(const char *path)
-{
-    CFBundleRef mainBundle;
-    CFURLRef url;
-    mainBundle = CFBundleGetMainBundle();
-    url = CFBundleCopyResourceURL(mainBundle,
-                                  CFStringCreateWithCString(NULL, path, kCFStringEncodingUTF8),
-                                  nil,
-                                  NULL);
-    return url != nil;
-}
-
-char *sys_read_asset(const char *path, int *size)
-{
-    FILE *file;
-    int read_size __attribute__((unused));
-    char *ret;
-    int default_size;
-    CFBundleRef main_bundle;
-    CFURLRef url;
-    CFStringRef asset_path;
-    CFStringEncoding encodingMethod;
-    main_bundle = CFBundleGetMainBundle();
-    url = CFBundleCopyResourceURL(main_bundle,
-                                  CFStringCreateWithCString(NULL, path, kCFStringEncodingUTF8),
-                                  nil,
-                                  NULL);
-    asset_path = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
-    encodingMethod = CFStringGetSystemEncoding();
-    path = CFStringGetCStringPtr(asset_path, encodingMethod);
-
-    size = size ?: &default_size;
-    file = fopen(path, "rb");
-    if (!file) LOG_E("cannot file file %s", path);
-    assert(file);
-    fseek(file, 0, SEEK_END);
-    *size = (int)ftell(file);
-    fseek(file, 0, SEEK_SET);
-    ret = malloc(*size + 1);
-    read_size = (int)fread(ret, *size, 1, file);
-    assert(read_size == 1 || *size == 0);
-    fclose(file);
-    ret[*size] = '\0';
-    return ret;
-}
-
-#endif
-
-GLuint sys_get_screen_framebuffer(void)
-{
-    return 0;
-}
-
-#ifdef __linux__
-
+#include <pwd.h>
 #include <gtk/gtk.h>
 
-const char *sys_get_clipboard_text(void* user)
+static const char *get_user_dir(void *user)
+{
+    static char *ret = NULL;
+    const char *home;
+    if (!ret) {
+        home = getenv("XDG_CONFIG_HOME");
+        if (home) {
+            asprintf(&ret, "%s/goxel", home);
+        } else {
+            home = getenv("HOME");
+            if (!home) home = getpwuid(getuid())->pw_dir;
+            asprintf(&ret, "%s/.config/goxel", home);
+        }
+    }
+    return ret;
+}
+
+static const char *get_clipboard_text(void* user)
 {
     GtkClipboard *cb;
     static gchar *text = NULL;
@@ -147,7 +64,7 @@ const char *sys_get_clipboard_text(void* user)
     return text;
 }
 
-void sys_set_clipboard_text(void *user, const char *text)
+static void set_clipboard_text(void *user, const char *text)
 {
     GtkClipboard *cb;
     gtk_init_check(NULL, NULL);
@@ -157,4 +74,141 @@ void sys_set_clipboard_text(void *user, const char *text)
     gtk_clipboard_store(cb);
 }
 
+static void init_unix(void) __attribute__((constructor));
+static void init_unix(void)
+{
+    sys_callbacks.get_user_dir = get_user_dir;
+    sys_callbacks.get_clipboard_text = get_clipboard_text;
+    sys_callbacks.set_clipboard_text = set_clipboard_text;
+}
+
 #endif
+
+#ifdef WIN32
+#define NOC_FILE_DIALOG_WIN32
+#define NOC_FILE_DIALOG_IMPLEMENTATION
+#include "noc_file_dialog.h"
+
+// On mingw mkdir takes only one argument!
+#define mkdir(p, m) mkdir(p)
+
+const char *get_user_dir(void *user)
+{
+    static char ret[MAX_PATH * 3 + 128] = {0};
+    wchar_t knownpath_16[MAX_PATH];
+    HRESULT hResult;
+
+    if (!ret[0]) {
+        hResult = SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL,
+                SHGFP_TYPE_CURRENT, knownpath_16);
+        if (hResult == S_OK) {
+            utf_16_to_8(knownpath_16, ret, MAX_PATH * 3);
+            strcat(ret, "\\Goxel\\");
+        }
+    }
+    return ret;
+}
+
+static void init_win(void) __attribute__((constructor));
+static void init_win(void)
+{
+    sys_callbacks.get_user_dir = get_user_dir;
+}
+
+#endif
+
+
+void sys_log(const char *msg)
+{
+    if (sys_callbacks.log) {
+        sys_callbacks.log(sys_callbacks.user, msg);
+    } else {
+        printf("%s\n", msg);
+        fflush(stdout);
+    }
+}
+
+// List all the files in a directory.
+int sys_list_dir(const char *dirpath,
+                 int (*callback)(const char *dirpath, const char *name,
+                                 void *user),
+                 void *user)
+{
+    DIR *dir;
+    struct dirent *dirent;
+    dir = opendir(dirpath);
+    if (!dir) return -1;
+    while ((dirent = readdir(dir))) {
+        if (dirent->d_name[0] == '.') continue;
+        if (callback(dirpath, dirent->d_name, user) != 0) break;
+    }
+    closedir(dir);
+    return 0;
+}
+
+int sys_delete_file(const char *path)
+{
+    return remove(path);
+}
+
+double sys_get_time(void)
+{
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    return (double)now.tv_sec + now.tv_usec / 1000000.0;
+}
+
+int sys_make_dir(const char *path)
+{
+    char tmp[PATH_MAX];
+    char *p;
+    strcpy(tmp, path);
+    for (p = tmp + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        if ((mkdir(tmp, S_IRWXU) != 0) && (errno != EEXIST)) return -1;
+        *p = '/';
+    }
+    return 0;
+}
+
+GLuint sys_get_screen_framebuffer(void)
+{
+    return 0;
+}
+
+void sys_set_window_title(const char *title)
+{
+    static char buf[1024] = {};
+    if (strcmp(buf, title) == 0) return;
+    strncpy(buf, title, sizeof(buf));
+    if (sys_callbacks.set_window_title)
+        sys_callbacks.set_window_title(sys_callbacks.user, title);
+}
+
+
+/*
+ * Function: sys_get_user_dir
+ * Return the user config directory for goxel
+ *
+ * On linux, this should be $HOME/.config/goxel.
+ */
+const char *sys_get_user_dir(void)
+{
+    if (sys_callbacks.get_user_dir)
+        return sys_callbacks.get_user_dir(sys_callbacks.user);
+    return NULL;
+}
+
+const char *sys_get_clipboard_text(void* user)
+{
+    if (sys_callbacks.get_clipboard_text)
+        return sys_callbacks.get_clipboard_text(sys_callbacks.user);
+    return NULL;
+}
+
+void sys_set_clipboard_text(void *user, const char *text)
+{
+    if (sys_callbacks.set_clipboard_text)
+        sys_callbacks.set_clipboard_text(sys_callbacks.user, text);
+}

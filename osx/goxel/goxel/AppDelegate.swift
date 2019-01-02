@@ -44,21 +44,22 @@ class GoxNSOpenGLView: NSOpenGLView {
     }
     
     func mouseEvent(_ id: Int, _ state: Int, _ event: NSEvent) {
-        appDelegate().inputs.mouse_pos = vec2(
-            Float(event.locationInWindow.x),
-            Float(self.frame.height - event.locationInWindow.y))
-        
+        appDelegate().inputs.touches.0.pos.0 =
+            Float(event.locationInWindow.x);
+        appDelegate().inputs.touches.0.pos.1 =
+            Float(self.frame.height - event.locationInWindow.y);
+
         // XXX: find a way to make it work with unsage memory.
         switch (id) {
-        case 0: appDelegate().inputs.mouse_down.0 = (state != 0);
-        case 1: appDelegate().inputs.mouse_down.1 = (state != 0);
-        case 2: appDelegate().inputs.mouse_down.2 = (state != 0);
+        case 0: appDelegate().inputs.touches.0.down.0 = (state != 0);
+        case 1: appDelegate().inputs.touches.0.down.1 = (state != 0);
+        case 2: appDelegate().inputs.touches.0.down.2 = (state != 0);
         default: break;
         }
         // Force an update after a mousedown event to make sure that it will
         // be recognised even if we release the mouse immediately.
         if state == 1 {
-            goxel_iter(&appDelegate().goxel, &appDelegate().inputs)
+            goxel_iter(&appDelegate().inputs)
         }
     }
     
@@ -79,6 +80,8 @@ class GoxNSOpenGLView: NSOpenGLView {
     
     override func keyDown(with event: NSEvent) {
         switch (event.keyCode) {
+            case 36: appDelegate().inputs.keys.257 = true
+            case 49: appDelegate().inputs.keys.32 = true
             case 51: appDelegate().inputs.keys.259 = true
             case 123: appDelegate().inputs.keys.263 = true
             case 124: appDelegate().inputs.keys.262 = true
@@ -95,6 +98,8 @@ class GoxNSOpenGLView: NSOpenGLView {
     
     override func keyUp(with event: NSEvent) {
         switch (event.keyCode) {
+            case 36: appDelegate().inputs.keys.257 = false
+            case 49: appDelegate().inputs.keys.32 = false
             case 51: appDelegate().inputs.keys.259 = false
             case 123: appDelegate().inputs.keys.263 = false
             case 124: appDelegate().inputs.keys.262 = false
@@ -118,18 +123,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @IBOutlet weak var view: GoxNSOpenGLView!
     fileprivate var timer: Timer!
     
-    open var goxel = goxel_t()
     open var inputs = inputs_t()
-
+    var userDirectory: [CChar]? = nil;
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // Set fullscreen.
+        if let screen = NSScreen.main() {
+            window.setFrame(screen.visibleFrame, display: true, animate: true)
+        }
         timer = Timer(timeInterval: 1.0 / 60.0,
             target: self,
             selector: #selector(AppDelegate.onTimer(_:)),
             userInfo: nil,
             repeats: true)
         RunLoop.current.add(timer, forMode: RunLoopMode.defaultRunLoopMode)
-        goxel_init(&self.goxel)
+
+        sys_callbacks.user = Unmanaged.passUnretained(self).toOpaque()
+        sys_callbacks.set_window_title = { (user, title) in
+            let mySelf = Unmanaged<AppDelegate>.fromOpaque(user!).takeUnretainedValue()
+            let title = String(cString: title!)
+            mySelf.window.title = title
+        }
+        sys_callbacks.get_user_dir = { (user) in
+            let mySelf = Unmanaged<AppDelegate>.fromOpaque(user!).takeUnretainedValue()
+            if mySelf.userDirectory == nil {
+                let paths = NSSearchPathForDirectoriesInDomains(
+                    .applicationSupportDirectory, .userDomainMask, true)
+                if paths.count > 0 {
+                    mySelf.userDirectory = paths[0].cString(using: .utf8)
+                }
+            }
+            return UnsafePointer(mySelf.userDirectory)
+        }
+        goxel_init()
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {
@@ -140,20 +166,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
     
-    func onTimer(_ sender: Timer!) {
+    @objc func onTimer(_ sender: Timer!) {
+        var r : Int32
         if (!window.isVisible) {
             return
         }
         glClear(GLbitfield(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT))
         self.inputs.window_size = (Int32(self.view.frame.size.width),
                                    Int32(self.view.frame.size.height))
-        goxel_iter(&self.goxel, &self.inputs)
-        goxel_render(&self.goxel)
+        self.inputs.scale = 1.0 // XXX: add support for retina screen!
+        r = goxel_iter(&self.inputs)
+        goxel_render()
         self.inputs.mouse_wheel = 0
         self.inputs.chars.0 = 0
         glFlush()
         view.openGLContext?.flushBuffer()
-        if self.goxel.quit {
+        if r == 1 {
             NSApplication.shared().terminate(nil)
         }
     }

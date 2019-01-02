@@ -19,13 +19,12 @@
 #include "goxel.h"
 
 typedef struct {
-    char    type[2];
     union {
         struct {
-            vec3_t   v;
-            uvec3b_t c;
+            float    v[3];
+            uint8_t  c[3];
         };
-        vec3_t vn;
+        float vn[3];
         struct {
             int  vs[4];
             int vns[4];
@@ -35,210 +34,221 @@ typedef struct {
 
 static UT_icd line_icd = {sizeof(line_t), NULL, NULL, NULL};
 
-static int lines_find(UT_array *lines, const line_t *line)
+static int lines_find(UT_array *lines, const line_t *line, int search_nb)
 {
-    int i, ret = 0;
+    int i, len;
     line_t *l;
-    for (i = 0; i < utarray_len(lines); i++) {
+    len = utarray_len(lines);
+    for (i = len - 1; (i >= 0) && (i > len - 1 - search_nb); i--) {
         l = (line_t*)utarray_eltptr(lines, i);
-        if (strncmp(l->type, line->type, 2) != 0) continue;
-        ret++;
-        if (memcmp(l, line, sizeof(*line)) == 0)
-            return ret;
+        if (memcmp(l, line, sizeof(*line)) == 0) return i + 1;
     }
     return 0;
 }
 
-static int lines_add(UT_array *lines, const line_t *line)
+/*
+ * Function: lines_add
+ * Add a line entry into a list and return its index.
+ *
+ * Parameters:
+ *   lines      - The list.
+ *   line       - The new line we want to add.
+ *   search_nb  - How far into the list we search for a similar line.  If
+ *                a similar line is found we just return its index insead
+ *                of adding a new one.
+ */
+static int lines_add(UT_array *lines, const line_t *line, int search_nb)
 {
-    int i;
-    i = lines_find(lines, line);
-    if (i) return i;
+    int idx;
+    idx = lines_find(lines, line, search_nb);
+    if (idx) return idx;
     utarray_push_back(lines, line);
-    return lines_find(lines, line);
+    return utarray_len(lines);
 }
 
-static int lines_count(UT_array *lines, const char *type)
-{
-    line_t *line = NULL;
-    int ret = 0;
-    while( (line = (line_t*)utarray_next(lines, line))) {
-        if (strncmp(line->type, type, 2) == 0)
-            ret++;
-    }
-    return ret;
-}
-
-void wavefront_export(const mesh_t *mesh, const char *path)
+static void export(const mesh_t *mesh, const char *path, bool ply)
 {
     // XXX: Merge faces that can be merged into bigger ones.
     //      Allow to chose between quads or triangles.
     //      Also export mlt file for the colors.
-    block_t *block;
     voxel_vertex_t* verts;
-    vec3_t v;
-    uvec3b_t c;
-    int nb_quads, i, j;
-    mat4_t mat;
+    float v[3];
+    uint8_t c[3];
+    int nb_elems, i, j, bpos[3];
+    float mat[4][4];
     FILE *out;
     const int N = BLOCK_SIZE;
-    UT_array *lines;
-    line_t line, face, *line_ptr;
+    int size = 0, subdivide;
+    UT_array *lines_f, *lines_v, *lines_vn;
+    line_t line, face, *line_ptr = NULL;
+    mesh_iterator_t iter;
 
-    utarray_new(lines, &line_icd);
+    utarray_new(lines_f, &line_icd);
+    utarray_new(lines_v, &line_icd);
+    utarray_new(lines_vn, &line_icd);
     verts = calloc(N * N * N * 6 * 4, sizeof(*verts));
-    face = (line_t){"f "};
-    MESH_ITER_BLOCKS(mesh, block) {
-        mat = mat4_identity;
-        mat4_itranslate(&mat, block->pos.x, block->pos.y, block->pos.z);
-        mat4_itranslate(&mat, -N / 2 + 0.5, -N / 2 + 0.5, -N / 2 + 0.5);
-
-        nb_quads = block_generate_vertices(block->data, 0, verts);
-        for (i = 0; i < nb_quads; i++) {
+    face = (line_t){};
+    iter = mesh_get_iterator(mesh,
+            MESH_ITER_BLOCKS | MESH_ITER_INCLUDES_NEIGHBORS);
+    while (mesh_iter(&iter, bpos)) {
+        mat4_set_identity(mat);
+        mat4_itranslate(mat, bpos[0], bpos[1], bpos[2]);
+        nb_elems = mesh_generate_vertices(mesh, bpos,
+                                    goxel.rend.settings.effects, verts,
+                                    &size, &subdivide);
+        for (i = 0; i < nb_elems; i++) {
             // Put the vertices.
-            for (j = 0; j < 4; j++) {
-                v = vec3(verts[i * 4 + j].pos.x,
-                         verts[i * 4 + j].pos.y,
-                         verts[i * 4 + j].pos.z);
-                v = mat4_mul_vec3(mat, v);
-                c = verts[i * 4 + j].color.rgb;
-                line = (line_t){"v ", .v = v, .c = c};
-                face.vs[j] = lines_add(lines, &line);
+            for (j = 0; j < size; j++) {
+                v[0] = verts[i * size + j].pos[0] / (float)subdivide;
+                v[1] = verts[i * size + j].pos[1] / (float)subdivide;
+                v[2] = verts[i * size + j].pos[2] / (float)subdivide;
+                mat4_mul_vec3(mat, v, v);
+                memcpy(c, verts[i * size + j].color, 3);
+                line = (line_t){
+                    .v = {v[0], v[1], v[2]}, .c = {c[0], c[1], c[2]}};
+                // XXX: not sure about the search nb value to use here.
+                face.vs[j] = lines_add(lines_v, &line, 1024);
             }
             // Put the normals
-            for (j = 0; j < 4; j++) {
-                v = vec3(verts[i * 4 + j].normal.x,
-                         verts[i * 4 + j].normal.y,
-                         verts[i * 4 + j].normal.z);
-                line = (line_t){"vn", .vn = v};
-                face.vns[j] = lines_add(lines, &line);
+            for (j = 0; j < size; j++) {
+                v[0] = verts[i * size + j].normal[0];
+                v[1] = verts[i * size + j].normal[1];
+                v[2] = verts[i * size + j].normal[2];
+                line = (line_t){.vn = {v[0], v[1], v[2]}};
+                face.vns[j] = lines_add(lines_vn, &line, 512);
             }
-            lines_add(lines, &face);
+            lines_add(lines_f, &face, 0);
         }
     }
     out = fopen(path, "w");
-    fprintf(out, "# Goxel " GOXEL_VERSION_STR "\n");
-    line_ptr = NULL;
-    while( (line_ptr = (line_t*)utarray_next(lines, line_ptr))) {
-        if (strncmp(line_ptr->type, "v ", 2) == 0)
+    if (ply) {
+        fprintf(out, "ply\n");
+        fprintf(out, "format ascii 1.0\n");
+        fprintf(out, "comment Generated from Goxel " GOXEL_VERSION_STR "\n");
+        fprintf(out, "element vertex %d\n", utarray_len(lines_v));
+        fprintf(out, "property float x\n");
+        fprintf(out, "property float y\n");
+        fprintf(out, "property float z\n");
+        fprintf(out, "property uchar red\n");
+        fprintf(out, "property uchar green\n");
+        fprintf(out, "property uchar blue\n");
+        fprintf(out, "element face %d\n", utarray_len(lines_f));
+        fprintf(out, "property list uchar int vertex_index\n");
+        fprintf(out, "end_header\n");
+        while( (line_ptr = (line_t*)utarray_next(lines_v, line_ptr))) {
+            fprintf(out, "%g %g %g %d %d %d\n",
+                    line_ptr->v[0], line_ptr->v[1], line_ptr->v[2],
+                    line_ptr->c[0], line_ptr->c[1], line_ptr->c[2]);
+        }
+        while( (line_ptr = (line_t*)utarray_next(lines_f, line_ptr))) {
+            if (size == 4) {
+                fprintf(out, "4 %d %d %d %d\n", line_ptr->vs[0] - 1,
+                                                line_ptr->vs[1] - 1,
+                                                line_ptr->vs[2] - 1,
+                                                line_ptr->vs[3] - 1);
+            } else {
+                fprintf(out, "3 %d %d %d\n",    line_ptr->vs[0] - 1,
+                                                line_ptr->vs[1] - 1,
+                                                line_ptr->vs[2] - 1);
+            }
+        }
+    } else {
+        fprintf(out, "# Goxel " GOXEL_VERSION_STR "\n");
+        while( (line_ptr = (line_t*)utarray_next(lines_v, line_ptr))) {
             fprintf(out, "v %g %g %g %f %f %f\n",
-                    VEC3_SPLIT(line_ptr->v),
-                    line_ptr->c.r / 255.,
-                    line_ptr->c.g / 255.,
-                    line_ptr->c.b / 255.);
-    }
-    while( (line_ptr = (line_t*)utarray_next(lines, line_ptr))) {
-        if (strncmp(line_ptr->type, "vn", 2) == 0)
-            fprintf(out, "vn %g %g %g\n", VEC3_SPLIT(line_ptr->vn));
-    }
-    while( (line_ptr = (line_t*)utarray_next(lines, line_ptr))) {
-        if (strncmp(line_ptr->type, "f ", 2) == 0)
-            fprintf(out, "f %d//%d %d//%d %d//%d %d//%d\n",
-                         line_ptr->vs[0], line_ptr->vns[0],
-                         line_ptr->vs[1], line_ptr->vns[1],
-                         line_ptr->vs[2], line_ptr->vns[2],
-                         line_ptr->vs[3], line_ptr->vns[3]);
+                    line_ptr->v[0], line_ptr->v[1], line_ptr->v[2],
+                    line_ptr->c[0] / 255.,
+                    line_ptr->c[1] / 255.,
+                    line_ptr->c[2] / 255.);
+        }
+        while( (line_ptr = (line_t*)utarray_next(lines_vn, line_ptr))) {
+            fprintf(out, "vn %g %g %g\n",
+                    line_ptr->vn[0], line_ptr->vn[1], line_ptr->vn[2]);
+        }
+        while( (line_ptr = (line_t*)utarray_next(lines_f, line_ptr))) {
+            if (size == 4) {
+                fprintf(out, "f %d//%d %d//%d %d//%d %d//%d\n",
+                             line_ptr->vs[0], line_ptr->vns[0],
+                             line_ptr->vs[1], line_ptr->vns[1],
+                             line_ptr->vs[2], line_ptr->vns[2],
+                             line_ptr->vs[3], line_ptr->vns[3]);
+            } else {
+                fprintf(out, "f %d//%d %d//%d %d//%d\n",
+                             line_ptr->vs[0], line_ptr->vns[0],
+                             line_ptr->vs[1], line_ptr->vns[1],
+                             line_ptr->vs[2], line_ptr->vns[2]);
+            }
+        }
     }
     fclose(out);
-    utarray_free(lines);
+    utarray_free(lines_f);
+    utarray_free(lines_v);
+    utarray_free(lines_vn);
     free(verts);
+}
+
+void wavefront_export(const mesh_t *mesh, const char *path)
+{
+    export(mesh, path, false);
 }
 
 void ply_export(const mesh_t *mesh, const char *path)
 {
-    block_t *block;
-    voxel_vertex_t* verts;
-    vec3_t v;
-    uvec3b_t c;
-    int nb_quads, i, j;
-    mat4_t mat;
-    FILE *out;
-    const int N = BLOCK_SIZE;
-    UT_array *lines;
-    line_t line, face, *line_ptr;
-
-    utarray_new(lines, &line_icd);
-    verts = calloc(N * N * N * 6 * 4, sizeof(*verts));
-    face = (line_t){"f "};
-    MESH_ITER_BLOCKS(mesh, block) {
-        mat = mat4_identity;
-        mat4_itranslate(&mat, block->pos.x, block->pos.y, block->pos.z);
-        mat4_itranslate(&mat, -N / 2 + 0.5, -N / 2 + 0.5, -N / 2 + 0.5);
-
-        nb_quads = block_generate_vertices(block->data, 0, verts);
-        for (i = 0; i < nb_quads; i++) {
-            // Put the vertices.
-            for (j = 0; j < 4; j++) {
-                v = vec3(verts[i * 4 + j].pos.x,
-                         verts[i * 4 + j].pos.y,
-                         verts[i * 4 + j].pos.z);
-                v = mat4_mul_vec3(mat, v);
-                c = verts[i * 4 + j].color.rgb;
-                line = (line_t){"v ", .v = v, .c = c};
-                face.vs[j] = lines_add(lines, &line);
-            }
-            // Put the normals
-            for (j = 0; j < 4; j++) {
-                v = vec3(verts[i * 4 + j].normal.x,
-                         verts[i * 4 + j].normal.y,
-                         verts[i * 4 + j].normal.z);
-                line = (line_t){"vn", .vn = v};
-                face.vns[j] = lines_add(lines, &line);
-            }
-            lines_add(lines, &face);
-        }
-    }
-    out = fopen(path, "w");
-    fprintf(out, "ply\n");
-    fprintf(out, "format ascii 1.0\n");
-    fprintf(out, "comment Generated from Goxel " GOXEL_VERSION_STR "\n");
-    fprintf(out, "element vertex %d\n", lines_count(lines, "v "));
-    fprintf(out, "property float x\n");
-    fprintf(out, "property float y\n");
-    fprintf(out, "property float z\n");
-    fprintf(out, "property uchar red\n");
-    fprintf(out, "property uchar green\n");
-    fprintf(out, "property uchar blue\n");
-    fprintf(out, "element face %d\n", lines_count(lines, "f "));
-    fprintf(out, "property list uchar int vertex_index\n");
-    fprintf(out, "end_header\n");
-    line_ptr = NULL;
-    while( (line_ptr = (line_t*)utarray_next(lines, line_ptr))) {
-        if (strncmp(line_ptr->type, "v ", 2) == 0)
-            fprintf(out, "%g %g %g %d %d %d\n",
-                    VEC3_SPLIT(line_ptr->v),
-                    VEC3_SPLIT(line_ptr->c));
-    }
-    while( (line_ptr = (line_t*)utarray_next(lines, line_ptr))) {
-        if (strncmp(line_ptr->type, "f ", 2) == 0)
-            fprintf(out, "4 %d %d %d %d\n", line_ptr->vs[0] - 1,
-                                            line_ptr->vs[1] - 1,
-                                            line_ptr->vs[2] - 1,
-                                            line_ptr->vs[3] - 1);
-    }
-    fclose(out);
-    utarray_free(lines);
-    free(verts);
+    export(mesh, path, true);
 }
 
 static void export_as_obj(const char *path)
 {
-    wavefront_export(goxel->layers_mesh, path);
+    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
+                    "obj\0*.obj\0", NULL, "untitled.obj");
+    if (!path) return;
+    wavefront_export(goxel.layers_mesh, path);
 }
 
+ACTION_REGISTER(mesh_export_as_obj,
+    .help = "Export the mesh as a wavefront obj file",
+    .cfunc = wavefront_export,
+    .csig = "vpp",
+    .file_format = {
+        .name = "obj",
+        .ext = "*.obj\0",
+    },
+)
+
 ACTION_REGISTER(export_as_obj,
-    .help = "Save the image as a wavefront obj file",
+    .help = "Export the image as a wavefront obj file",
     .cfunc = export_as_obj,
     .csig = "vp",
+    .file_format = {
+        .name = "obj",
+        .ext = "*.obj\0",
+    },
 )
 
 static void export_as_ply(const char *path)
 {
-    ply_export(goxel->layers_mesh, path);
+    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
+                    "ply\0*.ply\0", NULL, "untitled.ply");
+    if (!path) return;
+    ply_export(goxel.layers_mesh, path);
 }
+
+ACTION_REGISTER(mesh_export_as_ply,
+    .help = "Export the mesh as a ply file",
+    .cfunc = ply_export,
+    .csig = "vpp",
+    .file_format = {
+        .name = "ply",
+        .ext = "*.ply\0",
+    },
+)
 
 ACTION_REGISTER(export_as_ply,
     .help = "Save the image as a ply file",
     .cfunc = export_as_ply,
     .csig = "vp",
+    .file_format = {
+        .name = "ply",
+        .ext = "*.ply\0",
+    },
 )

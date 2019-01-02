@@ -20,81 +20,20 @@
 #include "goxel.h"
 #include <stdarg.h>
 
-// Global list of all the textures.
-static texture_t *g_textures = NULL;
-
 // Return the next power of 2 larger or equal to x.
 static int next_pow2(int x)
 {
-    return pow(2, ceil(log(x) / log(2)));
+    x--;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    x++;
+    return x;
 }
 
 static bool is_pow2(int x) { return x == next_pow2(x); }
-
-
-static void generate_framebuffer(texture_t *tex)
-{
-    assert(tex->w > 0 && tex->h > 0);
-    const int w = tex->tex_w;
-    const int h = tex->tex_h;
-    bool stencil = tex->flags & TF_STENCIL;
-    bool depth = tex->flags & TF_DEPTH;
-    assert(w == next_pow2(w));
-    assert(h == next_pow2(h));
-
-    GL(glGenFramebuffers(1, &tex->framebuffer));
-    GL(glBindFramebuffer(GL_FRAMEBUFFER, tex->framebuffer));
-    GL(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                              GL_TEXTURE_2D, tex->tex, 0));
-    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
-            GL_FRAMEBUFFER_COMPLETE);
-
-#ifndef GLES2
-    if (depth || stencil) {
-        GL(glGenRenderbuffers(1, &tex->depth));
-        GL(glBindRenderbuffer(GL_RENDERBUFFER, tex->depth));
-        GL(glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_STENCIL, w, h));
-        GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER,
-                GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, tex->depth));
-    }
-#else
-    // With opengl ES2, we need to check if we support packed depth/stencil
-    // or not.
-    if (has_gl_extension(GL_OES_packed_depth_stencil)) {
-        if (depth || stencil) {
-            GL(glGenRenderbuffers(1, &tex->depth));
-            GL(glBindRenderbuffer(GL_RENDERBUFFER, tex->depth));
-            GL(glRenderbufferStorage(GL_RENDERBUFFER,
-                                     GL_DEPTH24_STENCIL8_OES, w, h));
-            GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                         GL_RENDERBUFFER, tex->depth));
-            GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                                         GL_RENDERBUFFER, tex->depth));
-        }
-    } else {
-        if (depth) {
-            GL(glGenRenderbuffers(1, &tex->depth));
-            GL(glBindRenderbuffer(GL_RENDERBUFFER, tex->depth));
-            GL(glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16,
-                                     w, h));
-            GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                        GL_RENDERBUFFER, tex->depth));
-        }
-        if (stencil) {
-            GL(glGenRenderbuffers(1, &tex->stencil));
-            GL(glBindRenderbuffer(GL_RENDERBUFFER, tex->stencil));
-            GL(glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8,
-                                     w, h));
-            GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                        GL_RENDERBUFFER, tex->stencil));
-        }
-    }
-#endif
-    assert(
-        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
-
-    GL(glBindFramebuffer(GL_FRAMEBUFFER, sys_get_screen_framebuffer()));
-}
 
 static void texture_create_empty(texture_t *tex)
 {
@@ -134,9 +73,14 @@ static void texture_set_data(texture_t *tex,
     GL(glGenTextures(1, &tex->tex));
     GL(glActiveTexture(GL_TEXTURE0));
     GL(glBindTexture(GL_TEXTURE_2D, tex->tex));
-    GL(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
-    GL(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+    if (!(tex->flags & TF_NEAREST)) {
+        GL(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
+        GL(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
             (tex->flags & TF_MIPMAP)? GL_LINEAR_MIPMAP_NEAREST : GL_LINEAR));
+    } else {
+        GL(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
+        GL(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
+    }
     GL(glTexImage2D(GL_TEXTURE_2D, 0, tex->format, tex->tex_w, tex->tex_h,
                 0, tex->format, data_type, data));
     free(buff0);
@@ -145,7 +89,7 @@ static void texture_set_data(texture_t *tex,
         GL(glGenerateMipmap(GL_TEXTURE_2D));
 }
 
-texture_t *texture_new_image(const char *path)
+texture_t *texture_new_image(const char *path, int flags)
 {
     texture_t *tex;
     uint8_t *img;
@@ -161,13 +105,29 @@ texture_t *texture_new_image(const char *path)
     tex->tex_h = next_pow2(h);
     tex->w = w;
     tex->h = h;
-    tex->flags = TF_HAS_TEX;
+    tex->flags = TF_HAS_TEX | flags;
     tex->format = (int[]){0, 0, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA}[bpp];
     texture_create_empty(tex);
     texture_set_data(tex, img, w, h, bpp);
     free(img);
     tex->ref = 1;
-    LL_APPEND(g_textures, tex);
+    return tex;
+}
+
+texture_t *texture_new_from_buf(const uint8_t *data,
+                                int w, int h, int bpp, int flags)
+{
+    texture_t *tex;
+    tex = calloc(1, sizeof(*tex));
+    tex->tex_w = next_pow2(w);
+    tex->tex_h = next_pow2(h);
+    tex->w = w;
+    tex->h = h;
+    tex->flags = TF_HAS_TEX | flags;
+    tex->format = (int[]){0, 0, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA}[bpp];
+    texture_create_empty(tex);
+    texture_set_data(tex, data, w, h, bpp);
+    tex->ref = 1;
     return tex;
 }
 
@@ -183,7 +143,6 @@ texture_t *texture_new_surface(int w, int h, int flags)
     tex->format = (flags & TF_RGB) ? GL_RGB : GL_RGBA;
     texture_create_empty(tex);
     tex->ref = 1;
-    LL_APPEND(g_textures, tex);
     return tex;
 }
 
@@ -197,10 +156,9 @@ texture_t *texture_new_buffer(int w, int h, int flags)
     tex->w = w;
     tex->h = h;
     tex->flags = flags | TF_HAS_FB | TF_HAS_TEX;
-    texture_create_empty(tex);
-    generate_framebuffer(tex);
+    gl_gen_fbo(tex->tex_w, tex->tex_h, tex->format, 1,
+               &tex->framebuffer, &tex->tex);
     tex->ref = 1;
-    LL_APPEND(g_textures, tex);
     return tex;
 }
 
@@ -221,7 +179,6 @@ void texture_delete(texture_t *tex)
     }
     if (tex->tex)
         GL(glDeleteTextures(1, &tex->tex));
-    LL_DELETE(g_textures, tex);
     free(tex);
 }
 
@@ -236,13 +193,17 @@ void texture_get_data(const texture_t *tex, int w, int h, int bpp,
                       uint8_t *buf)
 {
     uint8_t *tmp;
-    int i;
-    tmp = calloc(w * h, bpp);
+    size_t i, j;
+    tmp = calloc(w * h, 4);
     GL(glBindFramebuffer(GL_FRAMEBUFFER, tex->framebuffer));
     GL(glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tmp));
-    // Flip output y.
+    // Flip output y and remove alpha if needed.
     for (i = 0; i < h; i++) {
-        memcpy(&buf[i * w * bpp], &tmp[(h - i - 1) * w * bpp], bpp * w);
+        for (j = 0; j < w; j++) {
+            memcpy(&buf[(i * w + j) * bpp],
+                   &tmp[((h - i - 1) * w  + j) * 4],
+                   bpp);
+        }
     }
     free(tmp);
 }

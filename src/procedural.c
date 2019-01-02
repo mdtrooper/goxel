@@ -22,6 +22,9 @@
 #include "goxel.h"
 #include <stdarg.h>
 
+// Amount of time (s) after which we force stop a rendering iteration.
+#define MAX_ITER_TIME (16.0 / 1000.)
+
 #define NODES \
     X(PROG) \
     X(SHAPE) \
@@ -114,9 +117,9 @@ struct proc_node {
 typedef struct proc_ctx ctx_t;
 struct proc_ctx {
     ctx_t       *next, *prev;
-    box_t       box;
+    float       box[4][4];
     int         mode;
-    vec4_t      color;
+    float       color[4];
     bool        antialiased;
     uint32_t    seed;
     node_t      *prog;
@@ -299,15 +302,18 @@ static node_t *get_rule(node_t *prog, const char *id, ctx_t *ctx)
     return NULL;
 }
 
-static void scale_normalize(mat4_t *mat, float v)
+static void scale_normalize(float mat[4][4], float v)
 {
-    float x, y, z, m;
-    x = vec3_norm(mat4_mul_vec(*mat, vec4(1, 0, 0, 0)).xyz);
-    y = vec3_norm(mat4_mul_vec(*mat, vec4(0, 1, 0, 0)).xyz);
-    z = vec3_norm(mat4_mul_vec(*mat, vec4(0, 0, 1, 0)).xyz);
-    m = min3(x, y, z);
+    float s[3], m;
+    float u[3][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}};
+    int i;
+    for (i = 0; i < 3; i++) {
+        mat4_mul_vec4(mat, u[i], u[i]);
+        s[i] = vec3_norm(u[i]);
+    }
+    m = min3(s[0], s[1], s[2]);
     if (v) m = v / 2;
-    mat4_iscale(mat, m / x, m / y, m / z);
+    mat4_iscale(mat, m / s[0], m / s[1], m / s[2]);
 }
 
 static int apply_transf(gox_proc_t *proc, node_t *node, ctx_t *ctx)
@@ -343,50 +349,50 @@ static int apply_transf(gox_proc_t *proc, node_t *node, ctx_t *ctx)
     switch (op) {
 
     case OP_sx:
-        mat4_iscale(&ctx->box.mat, v[0], 1, 1);
+        mat4_iscale(ctx->box, v[0], 1, 1);
         break;
     case OP_sy:
-        mat4_iscale(&ctx->box.mat, 1, v[0], 1);
+        mat4_iscale(ctx->box, 1, v[0], 1);
         break;
     case OP_sz:
-        mat4_iscale(&ctx->box.mat, 1, 1, v[0]);
+        mat4_iscale(ctx->box, 1, 1, v[0]);
         break;
     case OP_s:
         if (n == 1) v[1] = v[2] = v[0];
-        mat4_iscale(&ctx->box.mat, v[0], v[1], v[2]);
+        mat4_iscale(ctx->box, v[0], v[1], v[2]);
         break;
     case OP_sn:
-        scale_normalize(&ctx->box.mat, v[0]);
+        scale_normalize(ctx->box, v[0]);
         break;
     case OP_x:
-        mat4_itranslate(&ctx->box.mat, 2 * v[0], 2 * v[1], 2 * v[2]);
+        mat4_itranslate(ctx->box, 2 * v[0], 2 * v[1], 2 * v[2]);
         break;
     case OP_y:
-        mat4_itranslate(&ctx->box.mat, 0, 2 * v[0], 2 * v[1]);
+        mat4_itranslate(ctx->box, 0, 2 * v[0], 2 * v[1]);
         break;
     case OP_z:
-        mat4_itranslate(&ctx->box.mat, 0, 0, 2 * v[0]);
+        mat4_itranslate(ctx->box, 0, 0, 2 * v[0]);
         break;
     case OP_rx:
-        mat4_irotate(&ctx->box.mat, v[0] / 180 * M_PI, 1, 0, 0);
+        mat4_irotate(ctx->box, v[0] / 180 * M_PI, 1, 0, 0);
         break;
     case OP_ry:
-        mat4_irotate(&ctx->box.mat, v[0] / 180 * M_PI, 0, 1, 0);
+        mat4_irotate(ctx->box, v[0] / 180 * M_PI, 0, 1, 0);
         break;
     case OP_rz:
-        mat4_irotate(&ctx->box.mat, v[0] / 180 * M_PI, 0, 0, 1);
+        mat4_irotate(ctx->box, v[0] / 180 * M_PI, 0, 0, 1);
         break;
     case OP_hue:
-        if (n == 1) ctx->color.x = mod(ctx->color.x + v[0], 360);
-        else move_value(&ctx->color.x, v[0], v[1]);
+        if (n == 1) ctx->color[0] = mod(ctx->color[0] + v[0], 360);
+        else move_value(&ctx->color[0], v[0], v[1]);
         break;
     case OP_sat:
         if (n == 1) v[1] = 1;
-        move_value(&ctx->color.y, v[0], v[1]);
+        move_value(&ctx->color[1], v[0], v[1]);
         break;
     case OP_light:
         if (n == 1) v[1] = 1;
-        move_value(&ctx->color.z, v[0], v[1]);
+        move_value(&ctx->color[2], v[0], v[1]);
         break;
     case OP_sub:
         ctx->mode = MODE_SUB;
@@ -422,21 +428,22 @@ static int set_args(gox_proc_t *proc, node_t *node, ctx_t *ctx)
     return 0;
 }
 
-static void call_shape(const ctx_t *ctx, const shape_t *shape)
+static void call_shape(const ctx_t *ctx, const shape_t *shape,
+                       mesh_t *mesh, painter_t *painter)
 {
-    mesh_t *mesh = goxel->image->active_layer->mesh;
-    uvec3b_t hsl = uvec3b(ctx->color.x / 360 * 255,
-                          ctx->color.y * 255,
-                          ctx->color.z * 255);
-    goxel->painter.color.rgb = hsl_to_rgb(hsl);
-    goxel->painter.shape = shape;
-    goxel->painter.mode = ctx->mode;
-    goxel->painter.smoothness = ctx->antialiased ? 1 : 0;
-    mesh_op(mesh, &goxel->painter, &ctx->box);
+    uint8_t hsl[3] = {ctx->color[0] / 360 * 255,
+                      ctx->color[1] * 255,
+                      ctx->color[2] * 255};
+    hsl_to_rgb(hsl, painter->color);
+    painter->shape = shape;
+    painter->mode = ctx->mode;
+    painter->smoothness = ctx->antialiased ? 1 : 0;
+    mesh_op(mesh, painter, ctx->box);
 }
 
 // Iter the program once.
-static int iter(gox_proc_t *proc, ctx_t *ctx)
+static int iter(gox_proc_t *proc, ctx_t *ctx, mesh_t *mesh,
+                painter_t *painter)
 {
     const float max_op_volume = 512 * 512 * 512;
     float v;
@@ -459,9 +466,9 @@ static int iter(gox_proc_t *proc, ctx_t *ctx)
     }
 
     // XXX: find a better stopping condition.
-    if (vec3_norm2(ctx->box.w) < 0.2 ||
-        vec3_norm2(ctx->box.h) < 0.2 ||
-        vec3_norm2(ctx->box.d) < 0.2) goto end;
+    if (vec3_norm2(ctx->box[0]) < 0.2 ||
+        vec3_norm2(ctx->box[1]) < 0.2 ||
+        vec3_norm2(ctx->box[2]) < 0.2) goto end;
 
     DL_FOREACH(ctx->prog->children, expr) {
         if (expr->type == NODE_LOOP) {
@@ -492,7 +499,7 @@ static int iter(gox_proc_t *proc, ctx_t *ctx)
             if (v) {
                 ctx2 = *ctx;
                 ctx2.prog = expr->children->next;
-                iter(proc, &ctx2);
+                iter(proc, &ctx2, mesh, painter);
             }
         }
         if (expr->type == NODE_SET) {
@@ -515,7 +522,7 @@ static int iter(gox_proc_t *proc, ctx_t *ctx)
                     if (volume > max_op_volume)
                         return error(proc, expr, "abort: volume too big!");
                     volume_tot += volume;
-                    call_shape(&ctx2, SHAPES[i]);
+                    call_shape(&ctx2, SHAPES[i], mesh, painter);
                     break;
                 }
             }
@@ -550,7 +557,7 @@ int proc_parse(const char *txt, gox_proc_t *proc)
         return -1;
     }
     proc->state = PROC_READY;
-    if (0) visit(proc->prog, 0);
+    if ((0)) visit(proc->prog, 0);
     return 0;
 }
 
@@ -565,7 +572,7 @@ void proc_release(gox_proc_t *proc)
     proc->error.line = 0;
 }
 
-int proc_start(gox_proc_t *proc, const box_t *box)
+int proc_start(gox_proc_t *proc, const float box[4][4])
 {
     // Reinit the context to a single ctx_t pointing at the main shape.
     ctx_t *ctx;
@@ -574,9 +581,10 @@ int proc_start(gox_proc_t *proc, const box_t *box)
     proc->ctxs = NULL;
     proc->frame = 0;
     ctx = calloc(1, sizeof(*ctx));
-    ctx->box = box ? *box : bbox_from_extents(vec3_zero, 0.5, 0.5, 0.5);
-    ctx->color = vec4(0, 0, 1, 1);
-    ctx->mode = MODE_ADD;
+    if (box) mat4_copy(box, ctx->box);
+    else bbox_from_extents(ctx->box, vec3_zero, 0.5, 0.5, 0.5);
+    vec4_set(ctx->color, 0, 0, 1, 1);
+    ctx->mode = MODE_OVER;
     ctx->prog = get_rule(proc->prog, "main", ctx);
     set_seed(rand(), &ctx->seed);
     DL_APPEND(proc->ctxs, ctx);
@@ -591,11 +599,13 @@ int proc_stop(gox_proc_t *proc)
     return 0;
 }
 
-int proc_iter(gox_proc_t *proc)
+int proc_iter(gox_proc_t *proc, mesh_t *mesh, const painter_t *painter)
 {
     int r;
     bool last;
+    double start_time;
     ctx_t *ctx;
+    painter_t painter2 = *painter;
 
     if (proc->state != PROC_RUNNING) return 0;
 
@@ -612,6 +622,7 @@ int proc_iter(gox_proc_t *proc)
         proc->ctxs->prev->last = true;
 
     proc->in_frame = false;
+    start_time = sys_get_time();
 
     while (true) {
         ctx = proc->ctxs;
@@ -622,14 +633,14 @@ int proc_iter(gox_proc_t *proc)
         DL_DELETE(proc->ctxs, ctx);
         last = ctx->last;
         ctx->last = false;
-        r = iter(proc, ctx);
+        r = iter(proc, ctx, mesh, &painter2);
         free(ctx);
         if (r != 0) {
             proc->state = PROC_DONE;
             break;
         }
         if (last) break;
-        if (get_clock() - goxel->frame_clock > 16000000) {
+        if (sys_get_time() - start_time > MAX_ITER_TIME) {
             proc->in_frame = true;
             return 0;
         }
@@ -638,26 +649,57 @@ int proc_iter(gox_proc_t *proc)
     return 0;
 }
 
-static int list_saved_on_path(int i, const char *path, void *user)
+static int l_proc_run(const action_t *action, lua_State *l)
 {
-   const char *data, *name;
-   void (*f)(int, const char*, const char*) = user;
-   if (!str_endswith(path, ".goxcf")) return -1;
-   if (f) {
-       data = assets_get(path, NULL);
-       name = strrchr(path, '/') + 1;
-       f(i, name, data);
-   }
-   return 0;
+    gox_proc_t *proc;
+    mesh_t *mesh;
+    painter_t painter = (painter_t) {
+        .shape = &shape_cube,
+        .mode = MODE_INTERSECT,
+        .color = {255, 255, 255, 255},
+    };
+    proc = luaG_checkpointer(l, 1, "proc");
+    mesh = luaG_checkpointer(l, 2, "mesh");
+    proc_start(proc, NULL);
+    while (proc->state == PROC_RUNNING) {
+        proc_iter(proc, mesh, &painter);
+    }
+    return 0;
 }
 
-// List all the programs in data/progs.  Not sure if this works on
-// windows.
-int proc_list_examples(void (*f)(int index,
-                                 const char *name, const char *code))
+static gox_proc_t *proc_new(const char *code)
 {
-    return assets_list("data/progs", f, list_saved_on_path);
+    gox_proc_t *proc;
+    proc = calloc(1, sizeof(*proc));
+    if (proc_parse(code, proc)) {
+        free(proc);
+        return NULL;
+    }
+    return proc;
 }
+
+static void proc_delete(gox_proc_t *proc)
+{
+    proc_release(proc);
+    free(proc);
+}
+
+ACTION_REGISTER(proc_new,
+    .help = "Create a new procedural prog",
+    .cfunc = proc_new,
+    .csig = "pp",
+)
+
+ACTION_REGISTER(proc_delete,
+    .help = "Delete a procedural prog",
+    .cfunc = proc_delete,
+    .csig = "vp",
+)
+
+ACTION_REGISTER(proc_run,
+    .help = "Run a procedural prog",
+    .func = l_proc_run,
+)
 
 // The actual parser code come here, generated from procedural.leg
 
