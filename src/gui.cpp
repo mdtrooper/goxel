@@ -965,7 +965,7 @@ static void image_panel(void)
     auto_adjust_panel_size();
 }
 
-static void export_as(goxel_t *goxel, const char *filter)
+static void cameras_panel(void)
 {
     camera_t *cam;
     int i = 0;
@@ -1031,7 +1031,7 @@ static void import_image_plane(void)
     goxel_import_image_plane(path);
 }
 
-static void shift_alpha_popup(goxel_t *goxel, bool just_open)
+static bool shift_alpha_popup(void *data)
 {
     static int v = 0;
     static mesh_t *original_mesh = NULL;

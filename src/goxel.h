@@ -1875,9 +1875,4 @@ int script_run(const char *filename, int argc, const char **argv);
 
 
 
-// ###############################################
-void export_as_png(const char *path, int w, int h);
-void export_as_txt(const char *path);
-void qubicle_export(const mesh_t *mesh, const char *path);
-
 #endif // GOXEL_H
