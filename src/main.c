@@ -17,19 +17,13 @@
  */
 
 #include "goxel.h"
-
-#if DEBUG
-#   define DEBUG_ONLY(x) x
-#else
-#   define DEBUG_ONLY(x)
-#endif
+#include <getopt.h>
 
 #ifdef GLES2
 #   define GLFW_INCLUDE_ES2
 #endif
 #include <GLFW/glfw3.h>
 
-static goxel_t      *g_goxel = NULL;
 static inputs_t     *g_inputs = NULL;
 static GLFWwindow   *g_window = NULL;
 static float        g_scale = 1;
@@ -41,66 +35,57 @@ void on_scroll(GLFWwindow *win, double x, double y)
 
 void on_char(GLFWwindow *win, unsigned int c)
 {
-    int i;
-    if (c > 0 && c < 0x10000) {
-        for (i = 0; i < ARRAY_SIZE(g_inputs->chars); i++) {
-            if (!g_inputs->chars[i]) {
-                g_inputs->chars[i] = c;
-                break;
-            }
-        }
-    }
+    inputs_insert_char(g_inputs, c);
 }
 
 typedef struct
 {
     char *input;
     char *export;
+    char *script;
+    int script_args_nb;
+    const char *script_args[32];
     float scale;
 } args_t;
 
-#ifndef NO_ARGP
-#include <argp.h>
+#define OPT_SCRIPT 1
 
-const char *argp_program_version = "goxel " GOXEL_VERSION_STR;
-const char *argp_program_bug_address = "<guillaume@noctua-software.com>";
-static char doc[] = "A 3D voxels editor";
-static char args_doc[] = "[INPUT]";
-static struct argp_option options[] = {
-    {"export",   'e', "FILENAME", 0, "Export the model to a file" },
-    {"scale",    's', "FLOAT", 0, "Set UI scale (for retina display)"},
-    {},
-};
-
-/* Parse a single option. */
-static error_t parse_opt(int key, char *arg, struct argp_state *state)
+static void parse_options(int argc, char **argv, args_t *args)
 {
-    args_t *args = state->input;
-
-    switch (key)
-    {
-    case 'e':
-        args->export = arg;
-        break;
-    case 's':
-        args->scale = atof(arg);
-        break;
-    case ARGP_KEY_ARG:
-        if (state->arg_num >= 1)
-            argp_usage(state);
-        args->input = arg;
-        break;
-    case ARGP_KEY_END:
-        break;
-    default:
-        return ARGP_ERR_UNKNOWN;
+    int c, option_index;
+    static struct option long_options[] = {
+        {"export", required_argument, 0, 'e'},
+        {"scale", required_argument, 0, 's'},
+        {"script", required_argument, 0, OPT_SCRIPT},
+        {NULL, 0, NULL, 0}
+    };
+    while (true) {
+        c = getopt_long(argc, argv, "e:s:", long_options, &option_index);
+        if (c == -1) break;
+        switch (c) {
+        case 'e':
+            args->export = optarg;
+            break;
+        case 's':
+            args->scale = atof(optarg);
+            break;
+        case OPT_SCRIPT:
+            args->script = optarg;
+            break;
+        case '?':
+            exit(-1);
+        }
     }
-    return 0;
+    if (optind < argc) {
+        if (args->script) {
+            while (optind < argc)
+                args->script_args[args->script_args_nb++] = argv[optind++];
+        } else {
+            args->input = argv[optind];
+        }
+    }
 }
 
-/* Our argp parser. */
-static struct argp argp = { options, parse_opt, args_doc, doc };
-#endif
 
 static void loop_function(void) {
 
@@ -136,8 +121,8 @@ static void loop_function(void) {
         glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
     g_inputs->touches[0].down[2] =
         glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    goxel_iter(g_goxel, g_inputs);
-    goxel_render(g_goxel);
+    goxel_iter(g_inputs);
+    goxel_render();
 
     memset(g_inputs, 0, sizeof(*g_inputs));
     glfwSwapBuffers(g_window);
@@ -150,7 +135,7 @@ static void start_main_loop(void (*func)(void))
 {
     while (!glfwWindowShouldClose(g_window)) {
         func();
-        if (goxel->quit) break;
+        if (goxel.quit) break;
     }
     glfwTerminate();
 }
@@ -194,6 +179,11 @@ static void set_window_icon(GLFWwindow *window)
 static void set_window_icon(GLFWwindow *window) {}
 #endif
 
+static void set_window_title(void *user, const char *title)
+{
+    glfwSetWindowTitle(g_window, title);
+}
+
 int main(int argc, char **argv)
 {
     args_t args = {.scale = 1};
@@ -202,20 +192,20 @@ int main(int argc, char **argv)
     const GLFWvidmode *mode;
     int ret = 0;
     inputs_t inputs = {};
-    const char *title = "Goxel " GOXEL_VERSION_STR DEBUG_ONLY(" (debug)");
     g_inputs = &inputs;
-    g_goxel = calloc(1, sizeof(*g_goxel));
 
-#ifndef NO_ARGP
-    argp_parse (&argp, argc, argv, 0, 0, &args);
-#endif
+    // Setup sys callbacks.
+    sys_callbacks.set_window_title = set_window_title;
+    parse_options(argc, argv, &args);
+
     g_scale = args.scale;
 
     glfwInit();
-    // glfwWindowHint(GLFW_SAMPLES, 4); Should we use that?
+    glfwWindowHint(GLFW_SAMPLES, 4);
     monitor = glfwGetPrimaryMonitor();
     mode = glfwGetVideoMode(monitor);
-    window = glfwCreateWindow(mode->width, mode->height, title, NULL, NULL);
+    window = glfwCreateWindow(mode->width, mode->height, "Goxel", NULL, NULL);
+    assert(window);
     g_window = window;
     glfwMakeContextCurrent(window);
     glfwSetScrollCallback(window, on_scroll);
@@ -226,12 +216,21 @@ int main(int argc, char **argv)
 #ifdef WIN32
     glewInit();
 #endif
-    goxel_init(g_goxel);
+    goxel_init();
     // Run the unit tests in debug.
-    if (DEBUG) tests_run();
+    if (DEBUG) {
+        tests_run();
+        goxel_reset();
+    }
 
     if (args.input)
         action_exec2("import", "p", args.input);
+
+    if (args.script) {
+        script_run(args.script, args.script_args_nb, args.script_args);
+        goto end;
+    }
+
     if (args.export) {
         if (!args.input) {
             LOG_E("trying to export an empty image");
@@ -243,6 +242,7 @@ int main(int argc, char **argv)
     }
     start_main_loop(loop_function);
 end:
-    goxel_release(g_goxel);
+    glfwTerminate();
+    goxel_release();
     return ret;
 }

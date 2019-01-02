@@ -19,6 +19,19 @@
 #include "goxel.h"
 #include "ini.h"
 
+static int shortcut_callback(action_t *action, void *user)
+{
+    if (!(action->flags & ACTION_CAN_EDIT_SHORTCUT)) return 0;
+    gui_push_id(action->id);
+    gui_text("%s: %s", action->id, action->help);
+    gui_next_column();
+    // XXX: need to check if the inputs are valid!
+    gui_input_text("", action->shortcut, sizeof(action->shortcut));
+    gui_next_column();
+    gui_pop_id();
+    return 0;
+}
+
 
 bool gui_settings_popup(void *data)
 {
@@ -46,9 +59,9 @@ bool gui_settings_popup(void *data)
 
     // For the moment I disable the theme editor!
 #if 0
-    int group, color;
-    theme_t *theme = theme_get();
-    ImVec4 fcolor;
+    int group;
+    uint8_t *color;
+    theme = theme_get();
 
     gui_group_begin("Sizes");
     #define X(a) gui_input_int(#a, &theme->sizes.a, 0, 1000);
@@ -57,22 +70,26 @@ bool gui_settings_popup(void *data)
     gui_group_end();
 
     for (group = 0; group < THEME_GROUP_COUNT; group++) {
-        if (ImGui::CollapsingHeader(THEME_GROUP_INFOS[group].name)) {
-            for (color = 0; color < THEME_COLOR_COUNT; color++) {
-                if (!THEME_GROUP_INFOS[group].colors[color]) continue;
-                fcolor = theme->groups[group].colors[color];
-                if (ImGui::ColorEdit4(THEME_COLOR_INFOS[color].name,
-                                      (float*)&fcolor)) {
-                    theme->groups[group].colors[color] = fcolor;
-                }
+        if (gui_collapsing_header(THEME_GROUP_INFOS[group].name)) {
+            for (i = 0; i < THEME_COLOR_COUNT; i++) {
+                if (!THEME_GROUP_INFOS[group].colors[i]) continue;
+                color = theme->groups[group].colors[i];
+                gui_color(THEME_COLOR_INFOS[i].name, color);
             }
         }
     }
 
-    if (ImGui::Button("Revert")) theme_revert_default();
-    ImGui::SameLine();
-    if (ImGui::Button("Save")) theme_save();
+    if (gui_button("Revert", 0, 0)) theme_revert_default();
+    gui_same_line();
+    if (gui_button("Save", 0, 0)) theme_save();
 #endif
+    if (gui_collapsing_header("Shortcuts")) {
+        gui_columns(2);
+        gui_separator();
+        actions_iter(shortcut_callback, NULL);
+        gui_separator();
+        gui_columns(1);
+    }
 
     gui_popup_body_end();
     gui_action_button("settings_save", "Save", 0, "");
@@ -84,9 +101,17 @@ static int settings_ini_handler(void *user, const char *section,
                                 const char *name, const char *value,
                                 int lineno)
 {
+    action_t *a;
     if (strcmp(section, "ui") == 0) {
         if (strcmp(name, "theme") == 0) {
             theme_set(value);
+        }
+    }
+    if (strcmp(section, "shortcuts") == 0) {
+        if ((a = action_get(name, false))) {
+            strncpy(a->shortcut, value, sizeof(a->shortcut) - 1);
+        } else {
+            LOG_W("Cannot set shortcut for unknow action '%s'", name);
         }
     }
     return 0;
@@ -103,6 +128,14 @@ static void settings_load(const char *path)
     free(path_);
 }
 
+static int shortcut_save_callback(action_t *a, void *user)
+{
+    FILE *file = user;
+    if (strcmp(a->shortcut, a->default_shortcut ?: "") != 0)
+        fprintf(file, "%s=%s\n", a->id, a->shortcut);
+    return 0;
+}
+
 static void settings_save(void)
 {
     char *path;
@@ -112,6 +145,10 @@ static void settings_save(void)
     file = fopen(path, "w");
     fprintf(file, "[ui]\n");
     fprintf(file, "theme=%s\n", theme_get()->name);
+
+    fprintf(file, "[shortcuts]\n");
+    actions_iter(shortcut_save_callback, file);
+
     fclose(file);
     free(path);
 }

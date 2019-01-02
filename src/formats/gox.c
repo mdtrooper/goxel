@@ -18,32 +18,9 @@
 
 
 #include "goxel.h"
+#include <errno.h>
 
 #define VERSION 2 // Current version of the file format.
-
-#ifndef NO_ZLIB
-#   include <zlib.h>
-#else
-
-// If we don't have zlib, we simulate the gz functions using normal file
-// operations.
-typedef FILE *gzFile;
-static gzFile gzopen(const char *path, const char *mode) {
-    return fopen(path, mode);
-}
-static void gzclose(gzFile file) {fclose(file);}
-static size_t gzread(gzFile file, void *buff, size_t size) {
-    return fread(buff, size, 1, file);
-}
-static size_t gzwrite(gzFile file, const void *buff, size_t size) {
-    return fwrite(buff, size, 1, file);
-}
-static int gzeof(gzFile file) {return feof(file);}
-static int gzseek(gzFile file, long offset, int whence) {
-    return fseek(file, offset, whence);
-}
-
-#endif
 
 /*
  * File format, version 2:
@@ -54,8 +31,8 @@ static int gzseek(gzFile file, long offset, int whence) {
  *  4 bytes magic string        : "GOX "
  *  4 bytes version             : 2
  *  List of chunks:
- *      4 bytes: data length
  *      4 bytes: type
+ *      4 bytes: data length
  *      n bytes: data
  *      4 bytes: CRC
  *
@@ -91,6 +68,7 @@ static int gzseek(gzFile file, long offset, int whence) {
  *          dist: float
  *          rot: quaternion
  *          ofs: offset
+ *          ortho: bool
  *
  */
 
@@ -105,6 +83,13 @@ typedef struct {
 
 #define CHUNK_BUFF_SIZE (1 << 20) // 1 MiB max buffer size!
 
+// XXX: should be something in goxel.h
+static const shape_t *SHAPES[] = {
+    &shape_sphere,
+    &shape_cube,
+    &shape_cylinder,
+};
+
 typedef struct {
     char     type[4];
     int      length;
@@ -114,51 +99,58 @@ typedef struct {
     int      pos;
 } chunk_t;
 
-static void write_int32(gzFile out, int32_t v)
+static void write_int32(FILE *out, int32_t v)
 {
-    gzwrite(out, (char*)&v, 4);
+    fwrite((char*)&v, 4, 1, out);
 }
 
-static int32_t read_int32(gzFile in)
+static int32_t read_int32(FILE *in)
 {
     int32_t v;
-    gzread(in, &v, 4);
+    if (fread(&v, 4, 1, in) != 1) {
+        // XXX: use a better error mechanism!
+        LOG_E("Error reading file");
+    }
     return v;
 }
 
-static bool chunk_read_start(chunk_t *c, gzFile in)
+static bool chunk_read_start(chunk_t *c, FILE *in)
 {
+    size_t r;
     memset(c, 0, sizeof(*c));
-    gzread(in, c->type, 4);
-    if (gzeof(in)) return false;
+    r = fread(c->type, 4, 1, in);
+    if (r == 0) return false; // eof.
+    if (r != 1) LOG_E("Error reading file");
     c->length = read_int32(in);
     return true;
 }
 
-static void chunk_read(chunk_t *c, gzFile in, char *buff, int size)
+static void chunk_read(chunk_t *c, FILE *in, char *buff, int size)
 {
     c->pos += size;
     assert(c->pos <= c->length);
-    if (buff)
-        gzread(in, buff, size);
-    else
-        gzseek(in, size, SEEK_CUR);
+    if (buff) {
+        // XXX: use a better error mechanism!
+        if (fread(buff, size, 1, in) != 1) LOG_E("Error reading file");
+    } else {
+        fseek(in, size, SEEK_CUR);
+    }
 }
 
-static int32_t chunk_read_int32(chunk_t *c, gzFile in)
+static int32_t chunk_read_int32(chunk_t *c, FILE *in)
 {
     int32_t v;
     chunk_read(c, in, (char*)&v, 4);
     return v;
 }
 
-static void chunk_read_finish(chunk_t *c, gzFile in)
+static void chunk_read_finish(chunk_t *c, FILE *in)
 {
     assert(c->pos == c->length);
     read_int32(in); // TODO: check crc.
 }
 
-static bool chunk_read_dict_value(chunk_t *c, gzFile in,
+static bool chunk_read_dict_value(chunk_t *c, FILE *in,
                                   char *key, char *value, int *value_size) {
     int size;
     assert(c->pos <= c->length);
@@ -175,7 +167,7 @@ static bool chunk_read_dict_value(chunk_t *c, gzFile in,
     return true;
 }
 
-static void chunk_write_start(chunk_t *c, gzFile out, const char *type)
+static void chunk_write_start(chunk_t *c, FILE *out, const char *type)
 {
     memset(c, 0, sizeof(*c));
     assert(strlen(type) == 4);
@@ -183,7 +175,7 @@ static void chunk_write_start(chunk_t *c, gzFile out, const char *type)
     c->buffer = calloc(1, CHUNK_BUFF_SIZE);
 }
 
-static void chunk_write(chunk_t *c, gzFile out, const char *data, int size)
+static void chunk_write(chunk_t *c, FILE *out, const char *data, int size)
 {
     if (size == 0) return;
     assert(c->length + size < CHUNK_BUFF_SIZE);
@@ -191,12 +183,12 @@ static void chunk_write(chunk_t *c, gzFile out, const char *data, int size)
     c->length += size;
 }
 
-static void chunk_write_int32(chunk_t *c, gzFile out, int32_t v)
+static void chunk_write_int32(chunk_t *c, FILE *out, int32_t v)
 {
     chunk_write(c, out, (char*)&v, 4);
 }
 
-static void chunk_write_dict_value(chunk_t *c, gzFile out, const char *name,
+static void chunk_write_dict_value(chunk_t *c, FILE *out, const char *name,
                                    const void *data, int size)
 {
     chunk_write_int32(c, out, (int)strlen(name));
@@ -205,26 +197,26 @@ static void chunk_write_dict_value(chunk_t *c, gzFile out, const char *name,
     chunk_write(c, out, data, size);
 }
 
-static void chunk_write_finish(chunk_t *c, gzFile out)
+static void chunk_write_finish(chunk_t *c, FILE *out)
 {
-    gzwrite(out, c->type, 4);
+    fwrite(c->type, 4, 1, out);
     write_int32(out, c->length);
-    gzwrite(out, c->buffer, c->length);
+    fwrite(c->buffer, c->length, 1, out);
     write_int32(out, 0);        // CRC XXX: todo.
     free(c->buffer);
     c->buffer = NULL;
 }
 
-static void chunk_write_all(gzFile out, const char *type,
+static void chunk_write_all(FILE *out, const char *type,
                             const char *data, int size)
 {
-    gzwrite(out, type, 4);
+    fwrite(type, 4, 1, out);
     write_int32(out, size);
-    gzwrite(out, data, size);
+    fwrite(data, size, 1, out);
     write_int32(out, 0);        // CRC XXX: todo.
 }
 
-void save_to_file(goxel_t *goxel, const char *path, bool with_preview)
+void save_to_file(const image_t *img, const char *path, bool with_preview)
 {
     // XXX: remove all empty blocks before saving.
     LOG_I("Save to %s", path);
@@ -233,24 +225,24 @@ void save_to_file(goxel_t *goxel, const char *path, bool with_preview)
     chunk_t c;
     int nb_blocks, index, size, bpos[3];
     uint64_t uid;
-    gzFile out;
+    FILE *out;
     uint8_t *png, *preview;
     camera_t *camera;
     mesh_iterator_t iter;
 
-    out = gzopen(path, str_endswith(path, ".gz") ? "wb" : "wbT");
+    img = img ?: goxel.image;
+    out = fopen(path, "wb");
     if (!out) {
-        LOG_E("Cannot save to %s", path);
+        LOG_E("Cannot save to %s: %s", path, strerror(errno));
         return;
     }
-    gzwrite(out, "GOX ", 4);
+    fwrite("GOX ", 4, 1, out);
     write_int32(out, VERSION);
 
     // Write image info.
     chunk_write_start(&c, out, "IMG ");
-    if (!box_is_null(goxel->image->box))
-        chunk_write_dict_value(&c, out, "box", &goxel->image->box,
-                               sizeof(goxel->image->box));
+    if (!box_is_null(img->box))
+        chunk_write_dict_value(&c, out, "box", &img->box, sizeof(img->box));
     chunk_write_finish(&c, out);
 
     if (with_preview) {
@@ -264,7 +256,7 @@ void save_to_file(goxel_t *goxel, const char *path, bool with_preview)
 
     // Add all the blocks data into the hash table.
     index = 0;
-    DL_FOREACH(goxel->image->layers, layer) {
+    DL_FOREACH(img->layers, layer) {
         iter = mesh_get_iterator(layer->mesh, MESH_ITER_BLOCKS);
         while (mesh_iter(&iter, bpos)) {
             mesh_get_block_data(layer->mesh, &iter, bpos, &uid);
@@ -287,17 +279,17 @@ void save_to_file(goxel_t *goxel, const char *path, bool with_preview)
     }
 
     // Write all the layers.
-    DL_FOREACH(goxel->image->layers, layer) {
+    DL_FOREACH(img->layers, layer) {
         chunk_write_start(&c, out, "LAYR");
         nb_blocks = 0;
-        if (!layer->base_id) {
+        if (!layer->base_id && !layer->shape) {
             iter = mesh_get_iterator(layer->mesh, MESH_ITER_BLOCKS);
             while (mesh_iter(&iter, bpos)) {
                 nb_blocks++;
             }
         }
         chunk_write_int32(&c, out, nb_blocks);
-        if (!layer->base_id) {
+        if (!layer->base_id && !layer->shape) {
             iter = mesh_get_iterator(layer->mesh, MESH_ITER_BLOCKS);
             while (mesh_iter(&iter, bpos)) {
                 mesh_get_block_data(layer->mesh, &iter, bpos, &uid);
@@ -325,12 +317,18 @@ void save_to_file(goxel_t *goxel, const char *path, bool with_preview)
         if (!box_is_null(layer->box))
             chunk_write_dict_value(&c, out, "box", &layer->box,
                                    sizeof(layer->box));
+        if (layer->shape) {
+            chunk_write_dict_value(&c, out, "shape", layer->shape->id,
+                               strlen(layer->shape->id));
+            chunk_write_dict_value(&c, out, "color", layer->color,
+                                sizeof(layer->color));
+        }
 
         chunk_write_finish(&c, out);
     }
 
     // Write all the cameras.
-    DL_FOREACH(goxel->image->cameras, camera) {
+    DL_FOREACH(img->cameras, camera) {
         chunk_write_start(&c, out, "CAMR");
         chunk_write_dict_value(&c, out, "name", camera->name,
                                strlen(camera->name));
@@ -340,7 +338,9 @@ void save_to_file(goxel_t *goxel, const char *path, bool with_preview)
                                sizeof(camera->rot));
         chunk_write_dict_value(&c, out, "ofs", &camera->ofs,
                                sizeof(camera->ofs));
-        if (camera == goxel->image->active_camera)
+        chunk_write_dict_value(&c, out, "ortho", &camera->ortho,
+                               sizeof(camera->ortho));
+        if (camera == img->active_camera)
             chunk_write_dict_value(&c, out, "active", NULL, 0);
 
         chunk_write_finish(&c, out);
@@ -351,7 +351,7 @@ void save_to_file(goxel_t *goxel, const char *path, bool with_preview)
         free(data);
     }
 
-    gzclose(out);
+    fclose(out);
 }
 
 // Iter info of a gox file, without actually reading it.
@@ -361,15 +361,15 @@ int gox_iter_infos(const char *path,
                                    void *value, void *user),
                    void *user)
 {
-    gzFile in;
+    FILE *in;
     chunk_t c;
     uint8_t *png;
     char magic[4];
 
-    in = gzopen(path, "rb");
+    in = fopen(path, "rb");
 
-    gzread(in, magic, 4);
-    assert(strncmp(magic, "GOX ", 4) == 0);
+    if (fread(magic, 4, 1, in) != 1) return -1;
+    if (strncmp(magic, "GOX ", 4) != 0) return -1;
     read_int32(in);
 
     while (chunk_read_start(&c, in)) {
@@ -386,7 +386,7 @@ int gox_iter_infos(const char *path,
         }
         chunk_read_finish(&c, in);
     }
-    gzclose(in);
+    fclose(in);
     return 0;
 }
 
@@ -400,11 +400,11 @@ static block_hash_t *hash_find_at(block_hash_t *hash, int index)
     return hash;
 }
 
-int load_from_file(goxel_t *goxel, const char *path)
+int load_from_file(const char *path)
 {
     layer_t *layer, *layer_tmp;
     block_hash_t *blocks_table = NULL, *data, *data_tmp;
-    gzFile in;
+    FILE *in;
     char magic[4] = {};
     uint8_t *voxel_data;
     int nb_blocks;
@@ -418,10 +418,10 @@ int load_from_file(goxel_t *goxel, const char *path)
     uint64_t uid = 1;
     camera_t *camera;
 
-    in = gzopen(path, "rb");
+    in = fopen(path, "rb");
     if (!in) return -1;
 
-    gzread(in, magic, 4);
+    if (fread(magic, 4, 1, in) != 1) goto error;
     if (strncmp(magic, "GOX ", 4) != 0) goto error;
     version = read_int32(in);
     if (version > VERSION) {
@@ -431,11 +431,12 @@ int load_from_file(goxel_t *goxel, const char *path)
 
     // Remove all layers.
     // XXX: we should load the image fully before deleting the current one.
-    DL_FOREACH_SAFE(goxel->image->layers, layer, layer_tmp) {
+    DL_FOREACH_SAFE(goxel.image->layers, layer, layer_tmp) {
         mesh_delete(layer->mesh);
         free(layer);
     }
-    goxel->image->layers = NULL;
+    goxel.image->layers = NULL;
+    memset(&goxel.image->box, 0, sizeof(goxel.image->box));
 
     while (chunk_read_start(&c, in)) {
         if (strncmp(c.type, "BL16", 4) == 0) {
@@ -453,7 +454,7 @@ int load_from_file(goxel_t *goxel, const char *path)
             free(png);
 
         } else if (strncmp(c.type, "LAYR", 4) == 0) {
-            layer = image_add_layer(goxel->image);
+            layer = image_add_layer(goxel.image);
             nb_blocks = chunk_read_int32(&c, in);   assert(nb_blocks >= 0);
             for (i = 0; i < nb_blocks; i++) {
                 index = chunk_read_int32(&c, in);   assert(index >= 0);
@@ -488,23 +489,37 @@ int load_from_file(goxel_t *goxel, const char *path)
                     memcpy(&layer->base_id, dict_value, dict_value_size);
                 if (strcmp(dict_key, "box") == 0)
                     memcpy(&layer->box, dict_value, dict_value_size);
+
+                if (strcmp(dict_key, "shape") == 0) {
+                    for (i = 0; i < ARRAY_SIZE(SHAPES); i++) {
+                        if (strcmp(SHAPES[i]->id, dict_value) == 0) {
+                            layer->shape = SHAPES[i];
+                            break;
+                        }
+                    }
+                }
+                if (strcmp(dict_key, "color") == 0) {
+                    memcpy(layer->color, dict_value, dict_value_size);
+                }
             }
         } else if (strncmp(c.type, "CAMR", 4) == 0) {
             camera = camera_new("unnamed");
-            DL_APPEND(goxel->image->cameras, camera);
+            DL_APPEND(goxel.image->cameras, camera);
             while ((chunk_read_dict_value(&c, in, dict_key, dict_value,
                                           &dict_value_size))) {
                 if (strcmp(dict_key, "name") == 0)
-                    sprintf(camera->name, "%s", dict_value);
+                    strncpy(camera->name, dict_value, sizeof(camera->name));
                 if (strcmp(dict_key, "dist") == 0)
                     memcpy(&camera->dist, dict_value, dict_value_size);
                 if (strcmp(dict_key, "rot") == 0)
                     memcpy(&camera->rot, dict_value, dict_value_size);
                 if (strcmp(dict_key, "ofs") == 0)
                     memcpy(&camera->ofs, dict_value, dict_value_size);
+                if (strcmp(dict_key, "ortho") == 0)
+                    memcpy(&camera->ortho, dict_value, dict_value_size);
                 if (strcmp(dict_key, "active") == 0) {
-                    goxel->image->active_camera = camera;
-                    camera_set(&goxel->camera, camera);
+                    goxel.image->active_camera = camera;
+                    camera_set(&goxel.camera, camera);
                 }
             }
 
@@ -512,7 +527,7 @@ int load_from_file(goxel_t *goxel, const char *path)
             while ((chunk_read_dict_value(&c, in, dict_key, dict_value,
                                           &dict_value_size))) {
                 if (strcmp(dict_key, "box") == 0)
-                    memcpy(&goxel->image->box, dict_value, dict_value_size);
+                    memcpy(&goxel.image->box, dict_value, dict_value_size);
             }
         } else {
             // Ignore other blocks.
@@ -529,13 +544,21 @@ int load_from_file(goxel_t *goxel, const char *path)
         free(data);
     }
 
-    goxel->image->path = strdup(path);
-    goxel_update_meshes(goxel, -1);
-    gzclose(in);
+    goxel.image->path = strdup(path);
+    goxel.image->saved_key = image_get_key(goxel.image);
+    goxel_update_meshes(-1);
+    fclose(in);
+
+    // Update plane, snap mask and camera pos not to confuse people.
+    plane_from_vectors(goxel.plane, goxel.image->box[3],
+                       VEC(1, 0, 0), VEC(0, 1, 0));
+    if (box_is_null(goxel.image->box)) goxel.snap_mask |= SNAP_PLANE;
+    camera_fit_box(&goxel.camera, goxel.image->box);
+
     return 0;
 
 error:
-    gzclose(in);
+    fclose(in);
     return -1;
 }
 
@@ -546,16 +569,16 @@ static void action_open(const char *path)
         path = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, "gox\0*.gox\0",
                                     NULL, NULL);
     if (!path) return;
-    image_delete(goxel->image);
-    goxel->image = image_new();
-    load_from_file(goxel, path);
+    image_delete(goxel.image);
+    goxel.image = image_new();
+    load_from_file(path);
 }
 
 ACTION_REGISTER(open,
     .help = "Open an image",
     .cfunc = action_open,
     .csig = "vp",
-    .shortcut = "Ctrl O",
+    .default_shortcut = "Ctrl O",
 )
 
 static void save_as(const char *path, bool with_preview)
@@ -565,11 +588,12 @@ static void save_as(const char *path, bool with_preview)
                                     NULL, "untitled.gox");
         if (!path) return;
     }
-    if (path != goxel->image->path) {
-        free(goxel->image->path);
-        goxel->image->path = strdup(path);
+    if (path != goxel.image->path) {
+        free(goxel.image->path);
+        goxel.image->path = strdup(path);
+        goxel.image->saved_key = image_get_key(goxel.image);
     }
-    save_to_file(goxel, goxel->image->path, with_preview);
+    save_to_file(goxel.image, goxel.image->path, with_preview);
 }
 
 ACTION_REGISTER(save_as,
@@ -580,12 +604,12 @@ ACTION_REGISTER(save_as,
 
 static void save(const char *path, bool with_preview)
 {
-    save_as(path ?: goxel->image->path, with_preview);
+    save_as(path ?: goxel.image->path, with_preview);
 }
 
 ACTION_REGISTER(save,
     .help = "Save the image",
     .cfunc = save,
     .csig = "vpi",
-    .shortcut = "Ctrl S"
+    .default_shortcut = "Ctrl S"
 )

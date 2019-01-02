@@ -22,32 +22,110 @@
 #include <dirent.h>
 #include <errno.h>
 
-#ifdef __unix__
+#ifndef PATH_MAX
+#define PATH_MAX 1024
+#endif
+
+// The global system instance.
+sys_callbacks_t sys_callbacks = {};
+
+#if defined(__unix__) && !defined(__EMSCRIPTEN__) && !defined(ANDROID)
 #define NOC_FILE_DIALOG_GTK
 #define NOC_FILE_DIALOG_IMPLEMENTATION
 #include "noc_file_dialog.h"
 #include <pwd.h>
+#include <gtk/gtk.h>
+
+static const char *get_user_dir(void *user)
+{
+    static char *ret = NULL;
+    const char *home;
+    if (!ret) {
+        home = getenv("XDG_CONFIG_HOME");
+        if (home) {
+            asprintf(&ret, "%s/goxel", home);
+        } else {
+            home = getenv("HOME");
+            if (!home) home = getpwuid(getuid())->pw_dir;
+            asprintf(&ret, "%s/.config/goxel", home);
+        }
+    }
+    return ret;
+}
+
+static const char *get_clipboard_text(void* user)
+{
+    GtkClipboard *cb;
+    static gchar *text = NULL;
+    gtk_init_check(NULL, NULL);
+    g_free(text);
+    cb = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    text = gtk_clipboard_wait_for_text(cb);
+    return text;
+}
+
+static void set_clipboard_text(void *user, const char *text)
+{
+    GtkClipboard *cb;
+    gtk_init_check(NULL, NULL);
+    cb = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    gtk_clipboard_set_can_store(cb, NULL, 0);
+    gtk_clipboard_set_text(cb, text, -1);
+    gtk_clipboard_store(cb);
+}
+
+static void init_unix(void) __attribute__((constructor));
+static void init_unix(void)
+{
+    sys_callbacks.get_user_dir = get_user_dir;
+    sys_callbacks.get_clipboard_text = get_clipboard_text;
+    sys_callbacks.set_clipboard_text = set_clipboard_text;
+}
+
 #endif
 
 #ifdef WIN32
 #define NOC_FILE_DIALOG_WIN32
 #define NOC_FILE_DIALOG_IMPLEMENTATION
 #include "noc_file_dialog.h"
-#endif
-
-#ifndef PATH_MAX
-#define PATH_MAX 1024
-#endif
 
 // On mingw mkdir takes only one argument!
-#ifdef WIN32
 #define mkdir(p, m) mkdir(p)
+
+const char *get_user_dir(void *user)
+{
+    static char ret[MAX_PATH * 3 + 128] = {0};
+    wchar_t knownpath_16[MAX_PATH];
+    HRESULT hResult;
+
+    if (!ret[0]) {
+        hResult = SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL,
+                SHGFP_TYPE_CURRENT, knownpath_16);
+        if (hResult == S_OK) {
+            utf_16_to_8(knownpath_16, ret, MAX_PATH * 3);
+            strcat(ret, "\\Goxel\\");
+        }
+    }
+    return ret;
+}
+
+static void init_win(void) __attribute__((constructor));
+static void init_win(void)
+{
+    sys_callbacks.get_user_dir = get_user_dir;
+}
+
 #endif
+
 
 void sys_log(const char *msg)
 {
-    printf("%s\n", msg);
-    fflush(stdout);
+    if (sys_callbacks.log) {
+        sys_callbacks.log(sys_callbacks.user, msg);
+    } else {
+        printf("%s\n", msg);
+        fflush(stdout);
+    }
 }
 
 // List all the files in a directory.
@@ -66,6 +144,11 @@ int sys_list_dir(const char *dirpath,
     }
     closedir(dir);
     return 0;
+}
+
+int sys_delete_file(const char *path)
+{
+    return remove(path);
 }
 
 double sys_get_time(void)
@@ -94,67 +177,38 @@ GLuint sys_get_screen_framebuffer(void)
     return 0;
 }
 
-#ifdef __unix__
+void sys_set_window_title(const char *title)
+{
+    static char buf[1024] = {};
+    if (strcmp(buf, title) == 0) return;
+    strncpy(buf, title, sizeof(buf));
+    if (sys_callbacks.set_window_title)
+        sys_callbacks.set_window_title(sys_callbacks.user, title);
+}
 
-#include <gtk/gtk.h>
 
+/*
+ * Function: sys_get_user_dir
+ * Return the user config directory for goxel
+ *
+ * On linux, this should be $HOME/.config/goxel.
+ */
 const char *sys_get_user_dir(void)
 {
-    static char *ret = NULL;
-    const char *home;
-    if (!ret) {
-        home = getenv("XDG_CONFIG_HOME");
-        if (home) {
-            asprintf(&ret, "%s/goxel", home);
-        } else {
-            home = getenv("HOME");
-            if (!home) home = getpwuid(getuid())->pw_dir;
-            asprintf(&ret, "%s/.config/goxel", home);
-        }
-    }
-    return ret;
+    if (sys_callbacks.get_user_dir)
+        return sys_callbacks.get_user_dir(sys_callbacks.user);
+    return NULL;
 }
 
 const char *sys_get_clipboard_text(void* user)
 {
-    GtkClipboard *cb;
-    static gchar *text = NULL;
-    gtk_init_check(NULL, NULL);
-    g_free(text);
-    cb = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
-    text = gtk_clipboard_wait_for_text(cb);
-    return text;
+    if (sys_callbacks.get_clipboard_text)
+        return sys_callbacks.get_clipboard_text(sys_callbacks.user);
+    return NULL;
 }
 
 void sys_set_clipboard_text(void *user, const char *text)
 {
-    GtkClipboard *cb;
-    gtk_init_check(NULL, NULL);
-    cb = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
-    gtk_clipboard_set_can_store(cb, NULL, 0);
-    gtk_clipboard_set_text(cb, text, -1);
-    gtk_clipboard_store(cb);
+    if (sys_callbacks.set_clipboard_text)
+        sys_callbacks.set_clipboard_text(sys_callbacks.user, text);
 }
-
-#endif
-
-#ifdef WIN32
-
-const char *sys_get_user_dir(void)
-{
-    static char ret[MAX_PATH * 3 + 128] = {0};
-    wchar_t knownpath_16[MAX_PATH];
-    HRESULT hResult;
-
-    if (!ret[0]) {
-        hResult = SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL,
-                SHGFP_TYPE_CURRENT, knownpath_16);
-        if (hResult == S_OK) {
-            utf_16_to_8(knownpath_16, ret, MAX_PATH * 3);
-            strcat(ret, "\\Goxel\\");
-        }
-    }
-    return ret;
-}
-
-#endif

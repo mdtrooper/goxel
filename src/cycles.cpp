@@ -16,6 +16,8 @@
  * goxel.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifdef WITH_CYCLES
+
 #include "device/device.h"
 #include "render/background.h"
 #include "render/camera.h"
@@ -120,9 +122,9 @@ static ccl::Shader *create_background_shader(void)
     backgroundShaderNode->name = "backgroundNode";
     backgroundShaderNode->set(
         *backgroundShaderNode->type->find_input(S("color")),
-        ccl::make_float3(goxel->back_color[0] / 255.0f,
-                         goxel->back_color[1] / 255.0f,
-                         goxel->back_color[2] / 255.0f)
+        ccl::make_float3(goxel.back_color[0] / 255.0f,
+                         goxel.back_color[1] / 255.0f,
+                         goxel.back_color[2] / 255.0f)
     );
     backgroundShaderNode->set(
         *backgroundShaderNode->type->find_input(S("strength")),
@@ -144,7 +146,7 @@ static ccl::Mesh *create_mesh_for_block(
         const mesh_t *mesh, const int block_pos[3])
 {
     ccl::Mesh *ret = NULL;
-    int nb = 0, i, j;
+    int nb = 0, i, j, size, subdivide;
     voxel_vertex_t* vertices;
     ccl::Attribute *attr;
 
@@ -153,32 +155,58 @@ static ccl::Mesh *create_mesh_for_block(
 
     vertices = (voxel_vertex_t*)calloc(
             BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE * 6 * 4, sizeof(*vertices));
-    nb = mesh_generate_vertices(mesh, block_pos, 0, vertices);
+    nb = mesh_generate_vertices(mesh, block_pos,
+                                goxel.rend.settings.effects, vertices,
+                                &size, &subdivide);
     if (!nb) goto end;
 
-    ret->reserve_mesh(nb * 4, nb * 2);
-    for (i = 0; i < nb; i++) { // Once per quad.
-        for (j = 0; j < 4; j++) {
-            ret->add_vertex(ccl::make_float3(
-                        vertices[i * 4 + j].pos[0],
-                        vertices[i * 4 + j].pos[1],
-                        vertices[i * 4 + j].pos[2]));
+    if (size == 4) { // Quads
+        ret->reserve_mesh(nb * 4, nb * 2);
+        for (i = 0; i < nb; i++) { // Once per quad.
+            for (j = 0; j < 4; j++) {
+                ret->add_vertex(ccl::make_float3(
+                            vertices[i * 4 + j].pos[0] / (float)subdivide,
+                            vertices[i * 4 + j].pos[1] / (float)subdivide,
+                            vertices[i * 4 + j].pos[2] / (float)subdivide));
+            }
+            ret->add_triangle(i * 4 + 0, i * 4 + 1, i * 4 + 2, 0, false);
+            ret->add_triangle(i * 4 + 2, i * 4 + 3, i * 4 + 0, 0, false);
         }
-        ret->add_triangle(i * 4 + 0, i * 4 + 1, i * 4 + 2, 0, false);
-        ret->add_triangle(i * 4 + 2, i * 4 + 3, i * 4 + 0, 0, false);
+        // Set color attribute.
+        attr = ret->attributes.add(S("Col"), ccl::TypeDesc::TypeColor,
+                ccl::ATTR_ELEMENT_CORNER_BYTE);
+        for (i = 0; i < nb * 6; i++) {
+            attr->data_uchar4()[i] = ccl::make_uchar4(
+                    vertices[i / 6 * 4].color[0],
+                    vertices[i / 6 * 4].color[1],
+                    vertices[i / 6 * 4].color[2],
+                    vertices[i / 6 * 4].color[3]
+            );
+        }
+    } else { // Triangles
+        ret->reserve_mesh(nb * 3, nb);
+        for (i = 0; i < nb; i++) { // Once per triangle.
+            for (j = 0; j < 3; j++) {
+                ret->add_vertex(ccl::make_float3(
+                            vertices[i * 3 + j].pos[0] / (float)subdivide,
+                            vertices[i * 3 + j].pos[1] / (float)subdivide,
+                            vertices[i * 3 + j].pos[2] / (float)subdivide));
+            }
+            ret->add_triangle(i * 3 + 0, i * 3 + 1, i * 3 + 2, 0, false);
+        }
+        // Set color attribute.
+        attr = ret->attributes.add(S("Col"), ccl::TypeDesc::TypeColor,
+                ccl::ATTR_ELEMENT_CORNER_BYTE);
+        for (i = 0; i < nb * 3; i++) {
+            attr->data_uchar4()[i] = ccl::make_uchar4(
+                    vertices[i].color[0],
+                    vertices[i].color[1],
+                    vertices[i].color[2],
+                    vertices[i].color[3]
+            );
+        }
     }
 
-    // Set color attribute.
-    attr = ret->attributes.add(S("Col"), ccl::TypeDesc::TypeColor,
-            ccl::ATTR_ELEMENT_CORNER_BYTE);
-    for (i = 0; i < nb * 6; i++) {
-        attr->data_uchar4()[i] = ccl::make_uchar4(
-                vertices[i / 6 * 4].color[0],
-                vertices[i / 6 * 4].color[1],
-                vertices[i / 6 * 4].color[2],
-                vertices[i / 6 * 4].color[3]
-        );
-    }
 
 end:
     free(vertices);
@@ -187,7 +215,7 @@ end:
 
 static void sync_scene(ccl::Scene *scene, int w, int h)
 {
-    mesh_t *gmesh = goxel->render_mesh;
+    mesh_t *gmesh = goxel.render_mesh;
     int block_pos[3];
     mesh_iterator_t iter;
 
@@ -258,16 +286,19 @@ void cycles_init(void)
     // g_session_params.threads = 1;
 }
 
-static bool sync_mesh(int w, int h)
+static bool sync_mesh(int w, int h, bool force)
 {
     static uint64_t last_key = 0;
     uint64_t key;
     ccl::SceneParams scene_params;
 
-    key = mesh_get_key(goxel->render_mesh);
-    key = crc64(key, goxel->back_color, sizeof(goxel->back_color));
+    key = mesh_get_key(goxel.render_mesh);
+    key = crc64(key, goxel.back_color, sizeof(goxel.back_color));
     key = crc64(key, (const uint8_t*)&w, sizeof(w));
     key = crc64(key, (const uint8_t*)&h, sizeof(h));
+    key = crc64(key, (const uint8_t*)&goxel.rend.settings.effects,
+                     sizeof(goxel.rend.settings.effects));
+    key = crc64(key, (const uint8_t*)&force, sizeof(force));
 
     if (key == last_key) return false;
     last_key = key;
@@ -283,13 +314,13 @@ static bool sync_mesh(int w, int h)
         // scene_params.persistent_data = true;
         g_session = new ccl::Session(g_session_params);
         g_session->scene = new ccl::Scene(scene_params, g_session->device);
-        g_session->start();
     }
     if (!g_session->ready_to_reset()) return false;
     g_session->scene->mutex.lock();
     sync_scene(g_session->scene, w, h);
     g_session->scene->mutex.unlock();
     g_session->reset(g_buffer_params, g_session_params.samples);
+    g_session->start();
     return true;
 }
 
@@ -300,10 +331,10 @@ static bool sync_lights(int w, int h, bool force)
     float light_dir[3];
     ccl::Light *light;
     ccl::Scene *scene = g_session->scene;
-    render_get_light_dir(&goxel->rend, light_dir);
+    render_get_light_dir(&goxel.rend, light_dir);
 
-    key = mesh_get_key(goxel->render_mesh);
-    key = crc64(key, (uint8_t*)&goxel->rend.light, sizeof(goxel->rend.light));
+    key = mesh_get_key(goxel.render_mesh);
+    key = crc64(key, (uint8_t*)&goxel.rend.light, sizeof(goxel.rend.light));
     key = crc64(key, (uint8_t*)light_dir, sizeof(light_dir));
 
     if (!force && key == last_key) return false;
@@ -361,17 +392,17 @@ static bool sync_camera(int w, int h, const camera_t *camera, bool force)
     return true;
 }
 
-static bool sync(int w, int h, const camera_t *cam)
+static bool sync(int w, int h, const camera_t *cam, bool force)
 {
     bool mesh_changed;
-    mesh_changed = sync_mesh(w, h);
+    mesh_changed = sync_mesh(w, h, force);
     sync_lights(w, h, mesh_changed);
     sync_camera(w, h, cam, mesh_changed);
     return true;
 }
 
 void cycles_render(uint8_t *buffer, int *w, int *h, const camera_t *cam,
-                   float *progress)
+                   float *progress, bool force_restart)
 {
     static ccl::DeviceDrawParams draw_params = ccl::DeviceDrawParams();
 
@@ -380,7 +411,7 @@ void cycles_render(uint8_t *buffer, int *w, int *h, const camera_t *cam,
     g_buffer_params.full_width = *w;
     g_buffer_params.full_height = *h;
 
-    sync(*w, *h, cam);
+    sync(*w, *h, cam, force_restart);
     if (!g_session) return;
 
     std::unique_lock<std::mutex> lock(g_session->display_mutex);
@@ -403,3 +434,15 @@ void cycles_release(void)
     delete g_session;
     g_session = NULL;
 }
+
+#else
+// Dummy implementations.
+extern "C" {
+#include "goxel.h"
+}
+void cycles_init(void) {}
+void cycles_release(void) {}
+void cycles_render(uint8_t *buffer, int *w, int *h, const camera_t *cam,
+                   float *progress, bool force_restart) {}
+
+#endif

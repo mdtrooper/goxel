@@ -1,67 +1,49 @@
 #!/usr/bin/python
 
+# Goxel 3D voxels editor
+#
+# copyright (c) 2018 Guillaume Chereau <guillaume@noctua-software.com>
+#
+# Goxel is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version.
+#
+# Goxel is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# goxel.  If not, see <http://www.gnu.org/licenses/>.
+
+# ************************************************************************
 # Create the icon atlas image from all the icons svg files
 
+import itertools
 import PIL.Image
 from shutil import copyfile
 import os
 import subprocess
 import re
 
-SRC = [
-    'tool_brush.svg',
-    'tool_shape.svg',
-    'tool_laser.svg',
-    'tool_plane.svg',
-    'tool_move.svg',
-    'tool_pick_color.svg',
-    'tool_selection.svg',
-    'tool_procedural.svg',
-    None,
+# Use inkscape to convert the svg into one big png file.
+subprocess.check_output([
+    'inkscape', './svg/icons.svg', '--export-area-page',
+    '--export-dpi=192', '--export-png=/tmp/icons.png'])
 
-    'mode_add.svg',
-    'mode_sub.svg',
-    'mode_paint.svg',
-    'tool_extrude.svg',
-    None,
+src_img = PIL.Image.open('/tmp/icons.png')
+ret_img = PIL.Image.new('RGBA', (512, 512))
 
-    'shape_sphere.svg',
-    'shape_cube.svg',
-    'shape_cylinder.svg',
-    None,
+for x, y in itertools.product(range(8), range(8)):
+    img = src_img.crop((x * 46 + 2, y * 46 + 2, x * 46 + 46, y * 46 + 46))
+    # Make the image white in the special range.
+    if y >= 2 and y < 5:
+        tmp = PIL.Image.new('RGBA', (44, 44), (255, 255, 255, 255))
+        tmp.putalpha(img.split()[3])
+        img = tmp
+    ret_img.paste(img, (64 * x + 10, 64 * y + 10))
 
-    'add.svg',
-    'remove.svg',
-    'arrow_downward.svg',
-    'arrow_upward.svg',
-    'visibility.svg',
-    'visibility_off.svg',
-    'edit.svg',
-    'link.svg',
-    None,
-]
-
-ret_img = PIL.Image.new('L', (512, 512))
-
-x = 0
-y = 0
-for src in SRC:
-    if src is None:
-        y = y + 1
-        x = 0
-        continue
-    path = 'svg/{}'.format(src)
-    subprocess.check_output([
-        'inkscape', path, '--export-area-page',
-        '--export-width=48', '--export-height=48',
-        '--export-png=/tmp/symbols.png'])
-    img = PIL.Image.open('/tmp/symbols.png')
-    img = img.split()[3]
-    ret_img.paste(img, (64 * x + 8, 64 * y + 8))
-    x = x + 1
-
-white_img = PIL.Image.new('L', (512, 512), "white")
-ret_img = PIL.Image.merge('LA', (white_img, ret_img))
 ret_img.save('data/images/icons.png')
 
 # Also create the application icons (in data/icons)

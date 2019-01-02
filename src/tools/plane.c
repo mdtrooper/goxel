@@ -24,17 +24,17 @@ typedef struct {
 
 static int iter(tool_t *tool, const float viewport[4])
 {
-    cursor_t *curs = &goxel->cursor;
+    cursor_t *curs = &goxel.cursor;
     curs->snap_mask = SNAP_MESH;
     curs->snap_offset = 0;
 
-    goxel_set_help_text(goxel, "Click on the mesh to set plane.");
+    goxel_set_help_text("Click on the mesh to set plane.");
 
     if (curs->snaped && (curs->flags & CURSOR_PRESSED)) {
         curs->pos[0] = round(curs->pos[0]);
         curs->pos[1] = round(curs->pos[1]);
         curs->pos[2] = round(curs->pos[2]);
-        plane_from_normal(goxel->plane, curs->pos, curs->normal);
+        plane_from_normal(goxel.plane, curs->pos, curs->normal);
     }
     return 0;
 }
@@ -42,16 +42,23 @@ static int iter(tool_t *tool, const float viewport[4])
 static int gui(tool_t *tool)
 {
     int i;
+    bool v;
+
+    v = goxel.snap_mask & SNAP_PLANE;
+    if (gui_checkbox("Visible", &v, NULL)) {
+        set_flag(&goxel.snap_mask, SNAP_PLANE, v);
+    }
+
     gui_group_begin(NULL);
     i = 0;
     if (gui_input_int("Move", &i, 0, 0))
-        mat4_itranslate(goxel->plane, 0, 0, -i);
+        mat4_itranslate(goxel.plane, 0, 0, -i);
     i = 0;
     if (gui_input_int("Rot X", &i, 0, 0))
-        mat4_irotate(goxel->plane, i * M_PI / 2, 1, 0, 0);
+        mat4_irotate(goxel.plane, i * M_PI / 2, 1, 0, 0);
     i = 0;
     if (gui_input_int("Rot Y", &i, 0, 0))
-        mat4_irotate(goxel->plane, i * M_PI / 2, 0, 1, 0);
+        mat4_irotate(goxel.plane, i * M_PI / 2, 0, 1, 0);
     gui_group_end();
     return 0;
 }
@@ -59,5 +66,5 @@ static int gui(tool_t *tool)
 TOOL_REGISTER(TOOL_SET_PLANE, plane, tool_plane_t,
               .iter_fn = iter,
               .gui_fn = gui,
-              .shortcut = "P"
+              .default_shortcut = "P"
 )

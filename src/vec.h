@@ -577,6 +577,15 @@ DECL void mat4_irotate(float m[4][4], float a, float x, float y, float z)
     mat4_rotate(m, a, x, y, z, m);
 }
 
+DECL bool mat4_equal(const float a[4][4], const float b[4][4])
+{
+    int i, j;
+    for (i = 0; i < 4; i++)
+        for (j = 0; j < 4; j++)
+            if (a[i][j] != b[i][j]) return false;
+    return true;
+}
+
 DECL void quat_from_axis(float quat[4], float a, float x, float y, float z)
 {
     float sin_angle;
@@ -659,6 +668,7 @@ DECL void mat4_imul_quat(float mat[4][4], const float q[4])
 }
 
 void mat3_to_eul(const float m[3][3], int order, float e[3]);
+void mat3_to_eul2(const float m[3][3], int order, float e1[3], float e2[3]);
 void quat_to_mat3(const float q[4], float out[3][3]);
 
 DECL void quat_to_eul(const float q[4], int order, float e[3])
@@ -668,6 +678,22 @@ DECL void quat_to_eul(const float q[4], int order, float e[3])
     mat3_to_eul(m, order, e);
 }
 
+DECL void quat_to_eul2(const float q[4], int order, float e1[3], float e2[3])
+{
+    float m[3][3];
+    quat_to_mat3(q, m);
+    mat3_to_eul2(m, order, e1, e2);
+}
+
 void eul_to_quat(const float e[3], int order, float out[4]);
+
+DECL void quat_normalize(const float q[4], float out[4])
+{
+    float n = sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    out[0] = q[0] / n;
+    out[1] = q[1] / n;
+    out[2] = q[2] / n;
+    out[3] = q[3] / n;
+}
 
 #endif // VEC_H_

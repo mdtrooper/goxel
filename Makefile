@@ -16,10 +16,6 @@ profile:
 run:
 	./goxel
 
-.PHONY: js
-js:
-	$(EMSCRIPTEN)/emscons scons debug=0 emscripten=1
-
 clean:
 	scons -c
 

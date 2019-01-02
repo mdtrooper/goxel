@@ -18,7 +18,6 @@
 
 #include "goxel.h"
 #include <limits.h>
-#include <zlib.h> // For crc32.
 
 #define N BLOCK_SIZE
 
@@ -288,6 +287,7 @@ void mesh_op(mesh_t *mesh, const painter_t *painter, const float box[4][4])
     float box2[4][4];
     mesh_t *cached;
     static cache_t *cache = NULL;
+    const float *sym_o = painter->symmetry_origin;
 
     // Check if the operation has been cached.
     if (!cache) cache = cache_create(32);
@@ -312,9 +312,11 @@ void mesh_op(mesh_t *mesh, const painter_t *painter, const float box[4][4])
             if (!(painter->symmetry & (1 << i))) continue;
             painter2.symmetry &= ~(1 << i);
             mat4_set_identity(box2);
+            mat4_itranslate(box2, +sym_o[0], +sym_o[1], +sym_o[2]);
             if (i == 0) mat4_iscale(box2, -1,  1,  1);
             if (i == 1) mat4_iscale(box2,  1, -1,  1);
             if (i == 2) mat4_iscale(box2,  1,  1, -1);
+            mat4_itranslate(box2, -sym_o[0], -sym_o[1], -sym_o[2]);
             mat4_imul(box2, box);
             mesh_op(mesh, &painter2, box2);
         }
@@ -349,8 +351,11 @@ void mesh_op(mesh_t *mesh, const painter_t *painter, const float box[4][4])
         if (use_box && !bbox_contains_vec(*painter->box, p)) continue;
         mat4_mul_vec3(mat, p, p);
         k = shape_func(p, size, painter->smoothness);
-        k = clamp(k / painter->smoothness, -1.0f, 1.0f);
-        v = k / 2.0f + 0.5f;
+        if (painter->smoothness) {
+            v = clamp(k / painter->smoothness, -1.0f, 1.0f) / 2.0f + 0.5f;
+        } else {
+            v = (k >= 0.f) ? 1.f : 0.f;
+        }
         if (!v && skip_src_empty) continue;
         memcpy(c, painter->color, 4);
         c[3] *= v;
@@ -490,24 +495,116 @@ void mesh_crop(mesh_t *mesh, const float box[4][4])
     mesh_op(mesh, &painter, box);
 }
 
-/* Function: mesh_crc32
- * Compute the crc32 of the mesh data as an array of xyz rgba values.
+/* Function: mesh_crc64
+ * Compute the crc64 of the mesh data as an array of xyz rgba values.
  *
  * This is only used in the tests, to make sure that we can still open
  * old file formats.
  */
-uint32_t mesh_crc32(const mesh_t *mesh)
+uint64_t mesh_crc64(const mesh_t *mesh)
 {
     mesh_iterator_t iter;
     int pos[3];
     uint8_t v[4];
-    uint32_t ret = 0;
+    uint64_t ret = 0;
     iter = mesh_get_iterator(mesh, MESH_ITER_VOXELS);
     while (mesh_iter(&iter, pos)) {
         mesh_get_at(mesh, &iter, pos, v);
         if (!v[3]) continue;
-        ret = crc32(ret, (void*)pos, sizeof(pos));
-        ret = crc32(ret, (void*)v, sizeof(v));
+        ret = crc64(ret, (void*)pos, sizeof(pos));
+        ret = crc64(ret, (void*)v, sizeof(v));
     }
     return ret;
 }
+
+static int l_mesh_set_at(const action_t *action, lua_State *l)
+{
+    int pos[3];
+    uint8_t color[4];
+    mesh_t *mesh;
+
+    mesh = luaG_checkpointer(l, 1, "mesh");
+    luaG_checkpos(l, 2, pos);
+    luaG_checkcolor(l, 3, color);
+
+    mesh_set_at(mesh, NULL, pos, color);
+    return 0;
+}
+
+static int l_mesh_fill(const action_t *action, lua_State *l)
+{
+    int aabb[2][3], pos[3];
+    uint8_t c[4];
+    mesh_t *mesh;
+
+    mesh = (void*)lua_topointer(l, 1);
+    luaG_checkaabb(l, 2, aabb);
+    for (pos[2] = aabb[0][2]; pos[2] < aabb[1][2]; pos[2]++)
+    for (pos[1] = aabb[0][1]; pos[1] < aabb[1][1]; pos[1]++)
+    for (pos[0] = aabb[0][0]; pos[0] < aabb[1][0]; pos[0]++) {
+        lua_pushvalue(l, 3);
+        luaG_newintarray(l, 3, pos);
+        luaG_newintarray(l, 3, aabb[1]);
+        lua_call(l, 2, 1);
+        luaG_checkcolor(l, -1, c);
+        mesh_set_at(mesh, NULL, pos, c);
+        lua_pop(l, 1);
+    }
+    return 0;
+}
+
+static int l_mesh_save(const action_t *action, lua_State *l)
+{
+    const char *path, *type;
+    char buf[128];
+    mesh_t *mesh;
+    image_t *img;
+    layer_t *layer;
+
+    mesh = luaG_checkpointer(l, 1, "mesh");
+    path = luaL_checkstring(l, 2);
+    type = strrchr(path, '.');
+    if (!type) luaL_error(l, "file has no extension: %s", path);
+    type++;
+    sprintf(buf, "mesh_export_as_%s", type);
+    action = action_get(buf, false);
+    if (action)
+        return action_exec_lua(action, l);
+    if (strcmp(type, "gox") == 0) {
+        img = image_new();
+        layer = image_add_layer(img);
+        mesh_set(layer->mesh, mesh);
+        save_to_file(img, path, true);
+        image_delete(img);
+        return 0;
+    }
+    luaL_error(l, "Cannot find a save function for type %s", type);
+    return 0;
+}
+
+ACTION_REGISTER(mesh_new,
+    .help = "Create a new empty mesh",
+    .cfunc = mesh_new,
+    .csig = "p",
+)
+
+ACTION_REGISTER(mesh_delete,
+    .help = "delete a mesh",
+    .cfunc = mesh_delete,
+    .csig = "vp",
+)
+
+ACTION_REGISTER(mesh_set_at,
+    .help = "set a mesh voxel value",
+    .func = l_mesh_set_at,
+)
+
+ACTION_REGISTER(mesh_fill,
+    .help = "Fill a mesh",
+    .func = l_mesh_fill,
+)
+
+ACTION_REGISTER(mesh_save,
+    .help = "Save a mesh to a file",
+    .func = l_mesh_save,
+)

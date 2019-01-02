@@ -21,7 +21,7 @@
 camera_t *camera_new(const char *name)
 {
     camera_t *cam = calloc(1, sizeof(*cam));
-    strncpy(cam->name, name, sizeof(cam->name));
+    strncpy(cam->name, name, sizeof(cam->name) - 1);
     return cam;
 }
 
@@ -46,11 +46,11 @@ static void compute_clip(const float view_mat[4][4], float *near_, float *far_)
     int i;
     const int margin = 8 * BLOCK_SIZE;
     float vertices[8][3];
-    const mesh_t *mesh = goxel->layers_mesh;
+    const mesh_t *mesh = goxel.layers_mesh;
     mesh_iterator_t iter;
 
-    if (!box_is_null(goxel->image->box)) {
-        box_get_vertices(goxel->image->box, vertices);
+    if (!box_is_null(goxel.image->box)) {
+        box_get_vertices(goxel.image->box, vertices);
         for (i = 0; i < 8; i++) {
             mat4_mul_vec3(view_mat, vertices[i], p);
             if (p[2] < 0) {
@@ -139,9 +139,29 @@ void camera_set_target(camera_t *cam, const float pos[3])
 void camera_fit_box(camera_t *cam, const float box[4][4])
 {
     float size[3];
+    if (box_is_null(box)) {
+        cam->dist = 128;
+        cam->aspect = 1;
+        return;
+    }
     box_get_size(box, size);
     mat4_mul_vec3(box, VEC(0, 0, 0), cam->ofs);
     vec3_imul(cam->ofs, -1);
     // XXX: not the proper way to compute the distance.
     cam->dist = max3(size[0], size[1], size[2]) * 8;
+}
+
+/*
+ * Function: camera_get_key
+ * Return a value that is guarantied to change when the camera change.
+ */
+uint64_t camera_get_key(const camera_t *cam)
+{
+    uint64_t key = 0;
+    key = crc64(key, &cam->name, sizeof(cam->name));
+    key = crc64(key, &cam->ortho, sizeof(cam->ortho));
+    key = crc64(key, &cam->dist, sizeof(cam->dist));
+    key = crc64(key, &cam->rot, sizeof(cam->rot));
+    key = crc64(key, &cam->ofs, sizeof(cam->ofs));
+    return key;
 }

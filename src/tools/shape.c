@@ -24,6 +24,7 @@ typedef struct {
     float  start_pos[3];
     mesh_t *mesh_orig;
     bool   adjust;
+    bool   planar; // Stay on the original plane.
 
     struct {
         gesture3d_t drag;
@@ -85,17 +86,17 @@ static int on_hover(gesture3d_t *gest, void *user)
     cursor_t *curs = gest->cursor;
     uint8_t box_color[4] = {255, 255, 0, 255};
 
-    goxel_set_help_text(goxel, "Click and drag to draw.");
-    get_box(curs->pos, curs->pos, curs->normal, 0, goxel->plane, box);
-    render_box(&goxel->rend, box, box_color, EFFECT_WIREFRAME);
+    goxel_set_help_text("Click and drag to draw.");
+    get_box(curs->pos, curs->pos, curs->normal, 0, goxel.plane, box);
+    render_box(&goxel.rend, box, box_color, EFFECT_WIREFRAME);
     return 0;
 }
 
 static int on_drag(gesture3d_t *gest, void *user)
 {
     tool_shape_t *shape = user;
-    mesh_t *layer_mesh = goxel->image->active_layer->mesh;
-    float box[4][4];
+    mesh_t *layer_mesh = goxel.image->active_layer->mesh;
+    float box[4][4], pos[3];
     cursor_t *curs = gest->cursor;
 
     if (shape->adjust) return GESTURE_FAILED;
@@ -103,22 +104,27 @@ static int on_drag(gesture3d_t *gest, void *user)
     if (gest->state == GESTURE_BEGIN) {
         mesh_set(shape->mesh_orig, layer_mesh);
         vec3_copy(curs->pos, shape->start_pos);
-        image_history_push(goxel->image);
+        image_history_push(goxel.image);
+        if (shape->planar) {
+            vec3_addk(curs->pos, curs->normal, -curs->snap_offset, pos);
+            plane_from_normal(goxel.tool_plane, pos, curs->normal);
+        }
     }
 
-    goxel_set_help_text(goxel, "Drag.");
-    get_box(shape->start_pos, curs->pos, curs->normal, 0, goxel->plane, box);
-    if (!goxel->tool_mesh) goxel->tool_mesh = mesh_new();
-    mesh_set(goxel->tool_mesh, shape->mesh_orig);
-    mesh_op(goxel->tool_mesh, &goxel->painter, box);
-    goxel_update_meshes(goxel, MESH_RENDER);
+    goxel_set_help_text("Drag.");
+    get_box(shape->start_pos, curs->pos, curs->normal, 0, goxel.plane, box);
+    if (!goxel.tool_mesh) goxel.tool_mesh = mesh_new();
+    mesh_set(goxel.tool_mesh, shape->mesh_orig);
+    mesh_op(goxel.tool_mesh, &goxel.painter, box);
+    goxel_update_meshes(MESH_RENDER);
 
     if (gest->state == GESTURE_END) {
-        mesh_set(layer_mesh, goxel->tool_mesh);
-        mesh_delete(goxel->tool_mesh);
-        goxel->tool_mesh = NULL;
-        goxel_update_meshes(goxel, -1);
-        shape->adjust = goxel->tool_shape_two_steps;
+        mesh_set(layer_mesh, goxel.tool_mesh);
+        mesh_delete(goxel.tool_mesh);
+        goxel.tool_mesh = NULL;
+        goxel_update_meshes(-1);
+        shape->adjust = goxel.tool_shape_two_steps;
+        mat4_copy(plane_null, goxel.tool_plane);
     }
     return 0;
 }
@@ -128,32 +134,32 @@ static int on_adjust(gesture3d_t *gest, void *user)
     tool_shape_t *shape = user;
     cursor_t *curs = gest->cursor;
     float pos[3], v[3], box[4][4];
-    mesh_t *mesh = goxel->image->active_layer->mesh;
+    mesh_t *mesh = goxel.image->active_layer->mesh;
 
-    goxel_set_help_text(goxel, "Adjust height.");
+    goxel_set_help_text("Adjust height.");
 
     if (gest->state == GESTURE_BEGIN) {
-        plane_from_normal(goxel->tool_plane, curs->pos, goxel->plane[0]);
+        plane_from_normal(goxel.tool_plane, curs->pos, goxel.plane[0]);
     }
 
-    vec3_sub(curs->pos, goxel->tool_plane[3], v);
-    vec3_project(v, goxel->plane[2], v);
-    vec3_add(goxel->tool_plane[3], v, pos);
+    vec3_sub(curs->pos, goxel.tool_plane[3], v);
+    vec3_project(v, goxel.plane[2], v);
+    vec3_add(goxel.tool_plane[3], v, pos);
     pos[0] = round(pos[0] - 0.5) + 0.5;
     pos[1] = round(pos[1] - 0.5) + 0.5;
     pos[2] = round(pos[2] - 0.5) + 0.5;
 
-    get_box(shape->start_pos, pos, curs->normal, 0, goxel->plane, box);
+    get_box(shape->start_pos, pos, curs->normal, 0, goxel.plane, box);
 
     mesh_set(mesh, shape->mesh_orig);
-    mesh_op(mesh, &goxel->painter, box);
-    goxel_update_meshes(goxel, MESH_RENDER);
+    mesh_op(mesh, &goxel.painter, box);
+    goxel_update_meshes(MESH_RENDER);
 
     if (gest->state == GESTURE_END) {
-        mat4_copy(plane_null, goxel->tool_plane);
+        mat4_copy(plane_null, goxel.tool_plane);
         mesh_set(shape->mesh_orig, mesh);
         shape->adjust = false;
-        goxel_update_meshes(goxel, -1);
+        goxel_update_meshes(-1);
     }
 
     return 0;
@@ -162,11 +168,12 @@ static int on_adjust(gesture3d_t *gest, void *user)
 static int iter(tool_t *tool, const float viewport[4])
 {
     tool_shape_t *shape = (tool_shape_t*)tool;
-    cursor_t *curs = &goxel->cursor;
-    curs->snap_offset = (goxel->painter.mode == MODE_OVER) ? 0.5 : -0.5;
+    cursor_t *curs = &goxel.cursor;
+    curs->snap_mask |= SNAP_ROUNDED;
+    curs->snap_offset = (goxel.painter.mode == MODE_OVER) ? 0.5 : -0.5;
 
     if (!shape->mesh_orig)
-        shape->mesh_orig = mesh_copy(goxel->image->active_layer->mesh);
+        shape->mesh_orig = mesh_copy(goxel.image->active_layer->mesh);
 
     if (!shape->gestures.drag.type) {
         shape->gestures.drag = (gesture3d_t) {
@@ -195,15 +202,15 @@ static int iter(tool_t *tool, const float viewport[4])
 
 static int gui(tool_t *tool)
 {
+    tool_shape_t *tool_shape = (void*)tool;
     tool_gui_smoothness();
-    gui_checkbox("Two steps", &goxel->tool_shape_two_steps,
-                 "Second click set the height");
+    if (!DEFINED(GOXEL_MOBILE))
+        gui_checkbox("Two steps", &goxel.tool_shape_two_steps,
+                     "Second click set the height");
+    gui_checkbox("Planar", &tool_shape->planar, "Stay on original plane");
     tool_gui_snap();
-    tool_gui_mode();
-    tool_gui_shape();
-    tool_gui_color();
+    tool_gui_shape(NULL);
     tool_gui_symmetry();
-
     return 0;
 }
 
@@ -211,5 +218,5 @@ TOOL_REGISTER(TOOL_SHAPE, shape, tool_shape_t,
               .iter_fn = iter,
               .gui_fn = gui,
               .flags = TOOL_REQUIRE_CAN_EDIT | TOOL_ALLOW_PICK_COLOR,
-              .shortcut = "S",
+              .default_shortcut = "S",
 )

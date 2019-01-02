@@ -56,14 +56,11 @@ static int compile_shader(int shader, const char *code,
     int status, len;
     char *log;
     // Common header we add to all the shaders.
-    const char *pre =
-        "#ifdef GL_ES\n"
-        "    precision medium float\n"
-        "#else\n"
-        "    #define highp\n"
-        "    #define mediump\n"
-        "    #define lowp\n"
-        "#endif\n";
+#ifndef GLES2
+    const char *pre = "#define highp\n#define mediump\n#define lowp\n";
+#else
+    const char *pre = "";
+#endif
     const char *sources[] = {pre, include1, include2, code};
     assert(code);
     glShaderSource(shader, 4, (const char**)&sources, NULL);
@@ -76,6 +73,7 @@ static int compile_shader(int shader, const char *code,
         LOG_E("Compile shader error:");
         glGetShaderInfoLog(shader, len, &len, log);
         LOG_E("%s", log);
+        LOG_E("%s", code);
         free(log);
         assert(false);
     }
@@ -187,24 +185,20 @@ int gl_gen_fbo(int w, int h, GLenum format, int msaa,
     }
 
 #else
-    // XXX: need to check for packed depth stencil extension!
     if (format != GL_DEPTH_COMPONENT) {
-        // Create color render buffer.
-        GL(glGenRenderbuffers(1, &color));
-        GL(glBindRenderbuffer(GL_RENDERBUFFER, color));
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
-        GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                     GL_RENDERBUFFER, color));
-
-        // Create depth/stencil buffer.
-        GL(glGenRenderbuffers(1, &depth));
-        GL(glBindRenderbuffer(GL_RENDERBUFFER, depth));
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
-        GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                     GL_RENDERBUFFER, depth));
-        GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                                     GL_RENDERBUFFER, depth));
-
+        if (gl_has_extension("GL_OES_packed_depth_stencil")) {
+            // Create depth/stencil buffer.
+            GL(glGenRenderbuffers(1, &depth));
+            GL(glBindRenderbuffer(GL_RENDERBUFFER, depth));
+            GL(glRenderbufferStorage(GL_RENDERBUFFER,
+                                     GL_DEPTH24_STENCIL8_OES, w, h));
+            GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                         GL_RENDERBUFFER, depth));
+            GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER,
+                        GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depth));
+        } else {
+            assert(false); // Not implemented yet!
+        }
         if (tex) GL(glFramebufferTexture2D(
                     GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                     GL_TEXTURE_2D, tex, 0));
@@ -223,4 +217,11 @@ int gl_gen_fbo(int w, int h, GLenum format, int msaa,
     *out = fbo;
     if (tex) *out_tex = tex;
     return 0;
+}
+
+bool gl_has_extension(const char *ext)
+{
+    const char *str;
+    GL(str = (const char*)glGetString(GL_EXTENSIONS));
+    return strstr(str, ext);
 }

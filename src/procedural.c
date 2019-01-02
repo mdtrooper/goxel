@@ -22,6 +22,9 @@
 #include "goxel.h"
 #include <stdarg.h>
 
+// Amount of time (s) after which we force stop a rendering iteration.
+#define MAX_ITER_TIME (16.0 / 1000.)
+
 #define NODES \
     X(PROG) \
     X(SHAPE) \
@@ -425,21 +428,22 @@ static int set_args(gox_proc_t *proc, node_t *node, ctx_t *ctx)
     return 0;
 }
 
-static void call_shape(const ctx_t *ctx, const shape_t *shape)
+static void call_shape(const ctx_t *ctx, const shape_t *shape,
+                       mesh_t *mesh, painter_t *painter)
 {
-    mesh_t *mesh = goxel->image->active_layer->mesh;
     uint8_t hsl[3] = {ctx->color[0] / 360 * 255,
                       ctx->color[1] * 255,
                       ctx->color[2] * 255};
-    hsl_to_rgb(hsl, goxel->painter.color);
-    goxel->painter.shape = shape;
-    goxel->painter.mode = ctx->mode;
-    goxel->painter.smoothness = ctx->antialiased ? 1 : 0;
-    mesh_op(mesh, &goxel->painter, ctx->box);
+    hsl_to_rgb(hsl, painter->color);
+    painter->shape = shape;
+    painter->mode = ctx->mode;
+    painter->smoothness = ctx->antialiased ? 1 : 0;
+    mesh_op(mesh, painter, ctx->box);
 }
 
 // Iter the program once.
-static int iter(gox_proc_t *proc, ctx_t *ctx)
+static int iter(gox_proc_t *proc, ctx_t *ctx, mesh_t *mesh,
+                painter_t *painter)
 {
     const float max_op_volume = 512 * 512 * 512;
     float v;
@@ -495,7 +499,7 @@ static int iter(gox_proc_t *proc, ctx_t *ctx)
             if (v) {
                 ctx2 = *ctx;
                 ctx2.prog = expr->children->next;
-                iter(proc, &ctx2);
+                iter(proc, &ctx2, mesh, painter);
             }
         }
         if (expr->type == NODE_SET) {
@@ -518,7 +522,7 @@ static int iter(gox_proc_t *proc, ctx_t *ctx)
                     if (volume > max_op_volume)
                         return error(proc, expr, "abort: volume too big!");
                     volume_tot += volume;
-                    call_shape(&ctx2, SHAPES[i]);
+                    call_shape(&ctx2, SHAPES[i], mesh, painter);
                     break;
                 }
             }
@@ -595,11 +599,13 @@ int proc_stop(gox_proc_t *proc)
     return 0;
 }
 
-int proc_iter(gox_proc_t *proc)
+int proc_iter(gox_proc_t *proc, mesh_t *mesh, const painter_t *painter)
 {
     int r;
     bool last;
+    double start_time;
     ctx_t *ctx;
+    painter_t painter2 = *painter;
 
     if (proc->state != PROC_RUNNING) return 0;
 
@@ -616,6 +622,7 @@ int proc_iter(gox_proc_t *proc)
         proc->ctxs->prev->last = true;
 
     proc->in_frame = false;
+    start_time = sys_get_time();
 
     while (true) {
         ctx = proc->ctxs;
@@ -626,14 +633,14 @@ int proc_iter(gox_proc_t *proc)
         DL_DELETE(proc->ctxs, ctx);
         last = ctx->last;
         ctx->last = false;
-        r = iter(proc, ctx);
+        r = iter(proc, ctx, mesh, &painter2);
         free(ctx);
         if (r != 0) {
             proc->state = PROC_DONE;
             break;
         }
         if (last) break;
-        if (sys_get_time() - goxel->frame_time > 16 / 1000.) {
+        if (sys_get_time() - start_time > MAX_ITER_TIME) {
             proc->in_frame = true;
             return 0;
         }
@@ -642,28 +649,57 @@ int proc_iter(gox_proc_t *proc)
     return 0;
 }
 
-static int list_saved_on_path(int i, const char *path, void *user_)
+static int l_proc_run(const action_t *action, lua_State *l)
 {
-   const char *data, *name;
-   void (*f)(int, const char*, const char*, void*) = USER_GET(user_, 0);
-   void *user = USER_GET(user_, 1);
-   if (!str_endswith(path, ".goxcf")) return -1;
-   if (f) {
-       data = assets_get(path, NULL);
-       name = strrchr(path, '/') + 1;
-       f(i, name, data, user);
-   }
-   return 0;
+    gox_proc_t *proc;
+    mesh_t *mesh;
+    painter_t painter = (painter_t) {
+        .shape = &shape_cube,
+        .mode = MODE_INTERSECT,
+        .color = {255, 255, 255, 255},
+    };
+    proc = luaG_checkpointer(l, 1, "proc");
+    mesh = luaG_checkpointer(l, 2, "mesh");
+    proc_start(proc, NULL);
+    while (proc->state == PROC_RUNNING) {
+        proc_iter(proc, mesh, &painter);
+    }
+    return 0;
 }
 
-// List all the programs in data/progs.  Not sure if this works on
-// windows.
-int proc_list_examples(void (*f)(int index,
-                                 const char *name, const char *code,
-                                 void *user), void *user)
+static gox_proc_t *proc_new(const char *code)
 {
-    return assets_list("data/progs", USER_PASS(f, user), list_saved_on_path);
+    gox_proc_t *proc;
+    proc = calloc(1, sizeof(*proc));
+    if (proc_parse(code, proc)) {
+        free(proc);
+        return NULL;
+    }
+    return proc;
 }
+
+static void proc_delete(gox_proc_t *proc)
+{
+    proc_release(proc);
+    free(proc);
+}
+
+ACTION_REGISTER(proc_new,
+    .help = "Create a new procedural prog",
+    .cfunc = proc_new,
+    .csig = "pp",
+)
+
+ACTION_REGISTER(proc_delete,
+    .help = "Delete a procedural prog",
+    .cfunc = proc_delete,
+    .csig = "vp",
+)
+
+ACTION_REGISTER(proc_run,
+    .help = "Run a procedural prog",
+    .func = l_proc_run,
+)
 
 // The actual parser code come here, generated from procedural.leg
 

@@ -19,6 +19,10 @@
 
 #include "goxel.h"
 
+#ifndef RENDER_CACHE_SIZE
+#   define RENDER_CACHE_SIZE (1 * GB)
+#endif
+
 /*
  * The rendering is delayed from the time we call the different render
  * functions.  This allows to call `render_xxx` anywhere in the code, without
@@ -65,6 +69,7 @@ struct render_item_t
     GLuint      vertex_buffer;
     int         size;           // 4 (quads) or 3 (triangles).
     int         nb_elements;    // Number of quads or triangle.
+    int         subdivide;      // Unit per voxel (usually 1).
 };
 
 // The buffered item hash table.  For the moment it is only used of the blocks.
@@ -352,14 +357,16 @@ void render_init()
     GL(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_index_buffer));
     GL(glBufferData(GL_ELEMENT_ARRAY_BUFFER, BATCH_QUAD_COUNT * 6 * 2,
                     index_array, GL_STATIC_DRAW));
+#ifndef GLES2
     GL(glEnable(GL_LINE_SMOOTH));
+#endif
 
     free(index_array);
     init_border_texture();
     init_bump_texture();
 
     // XXX: pick the proper memory size according to what is available.
-    g_items_cache = cache_create(1 * GB);
+    g_items_cache = cache_create(RENDER_CACHE_SIZE);
     g_cube_model = model3d_cube();
     g_line_model = model3d_line();
     g_wire_cube_model = model3d_wire_cube();
@@ -436,8 +443,8 @@ static render_item_t *get_item_for_block(
                 BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE * 6 * 4,
                 sizeof(*g_vertices_buffer));
     item->nb_elements = mesh_generate_vertices(
-            mesh, block_pos, effects, g_vertices_buffer);
-    item->size = (effects & EFFECT_MARCHING_CUBES) ? 3 : 4;
+            mesh, block_pos, effects, g_vertices_buffer,
+            &item->size, &item->subdivide);
     if (item->nb_elements > BATCH_QUAD_COUNT) {
         LOG_W("Too many quads!");
         item->nb_elements = BATCH_QUAD_COUNT;
@@ -474,6 +481,7 @@ static void render_block_(renderer_t *rend, mesh_t *mesh,
         block_id_f[0] = ((block_id >> 0) & 0xff) / 255.0;
         GL(glUniform2fv(prog->u_block_id_l, 1, block_id_f));
     }
+    GL(glUniform1f(prog->u_pos_scale_l, 1.f / item->subdivide));
 
     for (attr = 0; attr < ARRAY_SIZE(ATTRIBUTES); attr++) {
         GL(glVertexAttribPointer(attr,
@@ -494,6 +502,20 @@ static void render_block_(renderer_t *rend, mesh_t *mesh,
     } else {
         GL(glDrawArrays(GL_TRIANGLES, 0, item->nb_elements * item->size));
     }
+
+#ifndef GLES2
+    if (effects & EFFECT_WIREFRAME) {
+        GL(glUniform1f(prog->u_m_amb_l, 0));
+        GL(glPolygonMode(GL_FRONT_AND_BACK, GL_LINE));
+        if (item->size == 4)
+            GL(glDrawElements(GL_TRIANGLES, item->nb_elements * 6,
+                              GL_UNSIGNED_SHORT, 0));
+        else
+            GL(glDrawArrays(GL_TRIANGLES, 0, item->nb_elements * item->size));
+        GL(glPolygonMode(GL_FRONT_AND_BACK, GL_FILL));
+        GL(glUniform1f(prog->u_m_amb_l, rend->settings.ambient));
+    }
+#endif
 }
 
 static void get_light_dir(const renderer_t *rend, bool model_view,
@@ -580,16 +602,12 @@ static void render_mesh_(renderer_t *rend, mesh_t *mesh, int effects,
     prog_t *prog;
     float model[4][4];
     int attr, block_pos[3], block_id;
-    float pos_scale = 1.0f;
     float light_dir[3];
     bool shadow = false;
     mesh_iterator_t iter;
 
     mat4_set_identity(model);
     get_light_dir(rend, true, light_dir);
-
-    if (effects & EFFECT_MARCHING_CUBES)
-        pos_scale = 1.0 / MC_VOXEL_SUB_POS;
 
     if (effects & EFFECT_RENDER_POS)
         prog = get_prog("asset://data/shaders/pos_data.glsl", NULL);
@@ -644,7 +662,6 @@ static void render_mesh_(renderer_t *rend, mesh_t *mesh, int effects,
     GL(glUniform1f(prog->u_m_shi_l, rend->settings.shininess));
     GL(glUniform1f(prog->u_m_smo_l, rend->settings.smoothness));
     GL(glUniform1f(prog->u_bshadow_l, rend->settings.border_shadow));
-    GL(glUniform1f(prog->u_pos_scale_l, pos_scale));
 
     for (attr = 0; attr < ARRAY_SIZE(ATTRIBUTES); attr++)
         GL(glEnableVertexAttribArray(attr));
@@ -752,7 +769,7 @@ void render_grid(renderer_t *rend, const float plane[4][4],
     mat4_iscale(item->mat, 8, 8, 1);
     item->model3d = g_grid_model;
     copy_color(color, item->color);
-    mat4_copy(clip_box, item->clip_box);
+    if (clip_box) mat4_copy(clip_box, item->clip_box);
     DL_APPEND(rend->items, item);
 }
 
@@ -828,8 +845,8 @@ void render_box(renderer_t *rend, const float box[4][4],
                 const uint8_t color[4], int effects)
 {
     render_item_t *item = calloc(1, sizeof(*item));
-    assert((effects & (EFFECT_STRIP | EFFECT_WIREFRAME | EFFECT_SEE_BACK)) \
-            == effects);
+    assert((effects & (EFFECT_STRIP | EFFECT_WIREFRAME | EFFECT_SEE_BACK |
+                       EFFECT_GRID)) == effects);
     item->type = ITEM_MODEL3D;
     mat4_copy(box, item->mat);
     copy_color(color, item->color);
@@ -888,8 +905,10 @@ static void render_shadow_map(renderer_t *rend, float shadow_mvp[4][4])
     if (!g_shadow_map_fbo) {
         GL(glGenFramebuffers(1, &g_shadow_map_fbo));
         GL(glBindFramebuffer(GL_FRAMEBUFFER, g_shadow_map_fbo));
+        #ifndef GLES2
         GL(glDrawBuffer(GL_NONE));
         GL(glReadBuffer(GL_NONE));
+        #endif
         g_shadow_map = texture_new_surface(2048, 2048, 0);
         GL(glBindTexture(GL_TEXTURE_2D, g_shadow_map->tex));
         GL(glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT,
@@ -929,12 +948,12 @@ static void render_background(renderer_t *rend, const uint8_t col[4])
     vertex_t vertices[4];
     float c1[4], c2[4];
 
-    if (col[3] == 0) {
+    if (!col || col[3] == 0) {
         GL(glClearColor(0, 0, 0, 0));
         GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
         return;
     }
-
+    GL(glClear(GL_DEPTH_BUFFER_BIT));
     // Add a small gradient to the color.
     vec4_set(c1, col[0] / 255., col[1] / 255., col[2] / 255., col[3] / 255.);
     vec4_set(c2, col[0] / 255., col[1] / 255., col[2] / 255., col[3] / 255.);
@@ -984,7 +1003,7 @@ void render_submit(renderer_t *rend, const int rect[4],
     GL(glViewport(rect[0] * s, rect[1] * s, rect[2] * s, rect[3] * s));
     GL(glScissor(rect[0] * s, rect[1] * s, rect[2] * s, rect[3] * s));
     GL(glLineWidth(rend->scale));
-    if (clear_color) render_background(rend, clear_color);
+    render_background(rend, clear_color);
 
     DL_SORT(rend->items, item_sort_cmp);
     DL_FOREACH_SAFE(rend->items, item, tmp) {
@@ -1045,7 +1064,6 @@ int render_get_default_settings(int i, char **name, render_settings_t *out)
         case 4:
             if (name) *name = "Half smooth";
             out->smoothness = 0.2;
-            out->effects = EFFECT_BORDERS_ALL;
             break;
         case 5:
             if (name) *name = "Marching";
@@ -1053,5 +1071,6 @@ int render_get_default_settings(int i, char **name, render_settings_t *out)
             out->effects = EFFECT_MARCHING_CUBES | EFFECT_FLAT;
             break;
     }
+    if (DEFINED(GOXEL_NO_SHADOW)) out->shadow = 0;
     return 5;
 }

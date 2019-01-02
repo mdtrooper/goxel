@@ -36,6 +36,7 @@ static inline ImVec4 color_lighten(ImVec4 c, float k)
 namespace ImGui {
 
     void GoxBox2(ImVec2 pos, ImVec2 size, ImVec4 color, bool fill,
+                 float thickness = 1,
                  int rounding_corners_flags = ~0)
     {
         ImGuiContext& g = *GImGui;
@@ -52,7 +53,7 @@ namespace ImGui {
             window->DrawList->AddRect(
                     pos, pos + size,
                     ImGui::ColorConvertFloat4ToU32(color), r,
-                    rounding_corners_flags);
+                    rounding_corners_flags, thickness);
         }
     }
 
@@ -63,7 +64,7 @@ namespace ImGui {
         const ImGuiStyle& style = g.Style;
         ImVec4 color  = style.Colors[selected ? ImGuiCol_ButtonActive :
                                      ImGuiCol_Button];
-        return GoxBox2(pos, size, color, true, rounding_corners_flags);
+        return GoxBox2(pos, size, color, true, 1, rounding_corners_flags);
     }
 
     // Copied from imgui, with some customization...
@@ -117,13 +118,13 @@ namespace ImGui {
         const ImRect total_bb(frame_bb.Min, frame_bb.Max + ImVec2(label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f, 0.0f));
 
         // NB- we don't call ItemSize() yet because we may turn into a text edit box below
-        if (!ItemAdd(total_bb, &id))
+        if (!ItemAdd(total_bb, id, &frame_bb))
         {
             ItemSize(total_bb, style.FramePadding.y);
             return false;
         }
 
-        const bool hovered = IsHovered(frame_bb, id);
+        const bool hovered = ItemHoverable(frame_bb, id);
         if (hovered)
             SetHoveredID(id);
 
@@ -166,11 +167,13 @@ namespace ImGui {
     bool GoxInputFloat(const char *label, float *v, float step,
                        float minv, float maxv, const char *format)
     {
+        const theme_t *theme = theme_get();
         bool ret = false;
         ImGuiContext& g = *GImGui;
         const ImGuiStyle& style = g.Style;
         const ImVec2 button_sz = ImVec2(
-                g.FontSize * 2.0f, g.FontSize + style.FramePadding.y * 2.0f);
+                max(g.FontSize * 2.0f, theme->sizes.item_height),
+                g.FontSize + style.FramePadding.y * 2.0f);
         int button_flags =
             ImGuiButtonFlags_Repeat | ImGuiButtonFlags_DontClosePopups;
         float speed = step / 20;

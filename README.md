@@ -2,7 +2,7 @@
 Goxel
 =====
 
-Version 0.7.3
+Version 0.8.0
 
 By Guillaume Chereau <guillaume@noctua-software.com>
 
@@ -13,6 +13,8 @@ By Guillaume Chereau <guillaume@noctua-software.com>
 [![DebianBadge](https://badges.debian.net/badges/debian/unstable/goxel/version.svg)](https://packages.debian.org/unstable/goxel)
 
 Webpage: https://guillaumechereau.github.io/goxel
+
+Online Procedural Rendering: https://voxeltoy.com
 
 About
 -----
@@ -52,6 +54,7 @@ Features
 - Marching Cube rendering.
 - Procedural rendering.
 - Export to obj, pyl, png, magica voxel, qubicle.
+- Ray tracing.
 
 
 Usage

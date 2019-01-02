@@ -29,13 +29,16 @@
 #   define NOMINMAX
 #endif
 
+#include "action.h"
 #include "vec.h"
 #include "utlist.h"
 #include "uthash.h"
 #include "utarray.h"
 #include "noc_file_dialog.h"
 #include "block_def.h"
+#include "luagoxel.h"
 #include "mesh.h"
+#include "theme.h"
 #include <float.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -43,8 +46,10 @@
 #include <string.h>
 #include <stdarg.h>
 
-#define GOXEL_VERSION_STR "0.7.3"
-#define GOXEL_DEFAULT_THEME "original"
+#define GOXEL_VERSION_STR "0.8.2"
+#ifndef GOXEL_DEFAULT_THEME
+#   define GOXEL_DEFAULT_THEME "original"
+#endif
 
 // #### Set the DEBUG macro ####
 #ifndef DEBUG
@@ -125,6 +130,9 @@ enum {
 
 #ifdef __EMSCRIPTEN__
 #   include <emscripten.h>
+#   define KEEPALIVE EMSCRIPTEN_KEEPALIVE
+#else
+#   define KEEPALIVE
 #endif
 
 // #### Include OpenGL #########
@@ -240,12 +248,24 @@ enum {
         (a)[2] == (b)[2] && \
         (a)[3] == (b)[3]; })
 
-// Convertion between radian and degree.
+/* Define: DR2D
+ * Convertion ratio from radian to degree. */
 #define DR2D (180 / M_PI)
+
+/* Define: DR2D
+ * Convertion ratio from degree to radian. */
 #define DD2R (M_PI / 180)
 
+/* Define: KB
+ * 1024 */
 #define KB 1024
+
+/* Define: MB
+ * 1024^2 */
 #define MB (1024 * KB)
+
+/* Define: GB
+ * 1024^3 */
 #define GB (1024 * MB)
 
 /*
@@ -352,12 +372,36 @@ char *read_file(const char *path, int *size);
 void dolog(int level, const char *msg,
            const char *func, const char *file, int line, ...);
 
+/*
+ * Function: img_read
+ * Read an image from a file.
+ */
 uint8_t *img_read(const char *path, int *width, int *height, int *bpp);
+
+/*
+ * Function: img_read_from_mem
+ * Read an image from memory.
+ */
 uint8_t *img_read_from_mem(const char *data, int size,
                            int *w, int *h, int *bpp);
+
+/*
+ * Function: img_write
+ * Write an image to a file.
+ */
 void img_write(const uint8_t *img, int w, int h, int bpp, const char *path);
+
+/*
+ * Function: img_write_to_mem
+ * Write an image to memory.
+ */
 uint8_t *img_write_to_mem(const uint8_t *img, int w, int h, int bpp,
                           int *size);
+
+/*
+ * Function: img_downsample
+ * Downsample an image by half, using interpolation.
+ */
 void img_downsample(const uint8_t *img, int w, int h, int bpp,
                     uint8_t *out);
 /*
@@ -450,7 +494,7 @@ int b64_decode(const char *src, void *dest);
  * Return:
  *   The new crc64 value.
  */
-uint64_t crc64(uint64_t crc, const uint8_t *s, uint64_t len);
+uint64_t crc64(uint64_t crc, const void *s, uint64_t len);
 
 // #############################
 
@@ -461,24 +505,13 @@ uint64_t crc64(uint64_t crc, const uint8_t *s, uint64_t len);
 
 // ######### Section: GL utils ############################
 
-/* Enum of all the gl extensions we care for. */
-enum {
-    GOX_GL_QCOM_tiled_rendering,
-    GOX_GL_OES_packed_depth_stencil,
-    GOX_GL_OES_depth_texture,
-    GOX_GL_EXT_discard_framebuffer,
-
-    GOX_GL_EXTENSIONS_COUNT
-};
-
 int gl_check_errors(const char *file, int line);
 
 /*
  * Function: gl_has_extension
  * Check whether an OpenGL extension is available.
  */
-bool _gl_has_extension(int extension);
-#define gl_has_extension(x) (_gl_has_extension(GOX_##x))
+bool gl_has_extension(const char *extension);
 
 /*
  * Function: gl_create_prog
@@ -514,6 +547,21 @@ int gl_gen_fbo(int w, int h, GLenum format, int msaa,
  * operating system, not relying on libc, should go there.
  */
 
+
+/*
+ * Global structure that hold pointers to system functions.  Need to be
+ * set at init time.
+ */
+typedef struct {
+    void *user;
+    void (*log)(void *user, const char *msg);
+    void (*set_window_title)(void *user, const char *title);
+    const char *(*get_user_dir)(void *user);
+    const char *(*get_clipboard_text)(void* user);
+    void (*set_clipboard_text)(void *user, const char *text);
+} sys_callbacks_t;
+extern sys_callbacks_t sys_callbacks;
+
 /*
  * Function: sys_log
  * Write a log message to output.
@@ -538,6 +586,12 @@ int sys_list_dir(const char *dir,
                  int (*callback)(const char *dir, const char *name,
                                  void *user),
                  void *user);
+
+/*
+ * Function: sys_delete_file
+ * Delete a file from the system.
+ */
+int sys_delete_file(const char *path);
 
 /*
  * Function: sys_get_user_dir
@@ -565,6 +619,12 @@ GLuint sys_get_screen_framebuffer(void);
  * Return the unix time (seconds since Jan 01 1970).
  */
 double sys_get_time(void); // Unix time.
+
+/*
+ * Function: sys_set_window_title
+ * Set the window title.
+ */
+void sys_set_window_title(const char *title);
 // #############################
 
 
@@ -618,117 +678,67 @@ void texture_delete(texture_t *tex);
 // #############################
 
 
-// #### Action #################
-
-// We support some basic reflexion of functions.  We do this by registering the
-// functions with the ACTION_REGISTER macro.  Once a function has been
-// registered, it is possible to query it (action_get) and call it
-// (action_exec).
-// Check the end of image.c to see some examples.  The idea is that this will
-// make it much easier to add meta information to functions, like
-// documentation, shortcuts.  Also in theory this should allow to add a
-// scripting engine on top of goxel quite easily.
-
-// XXX: this is still pretty experimental.  This might change in the future.
-
-typedef struct astack astack_t;
-
-astack_t *stack_create(void);
-void      stack_delete(astack_t *s);
-
-void  stack_clear(astack_t *s);
-int   stack_size(const astack_t *s);
-char  stack_type(const astack_t *s, int i);
-void  stack_push_i(astack_t *s, int i);
-void  stack_push_p(astack_t *s, void *p);
-void  stack_push_b(astack_t *s, bool b);
-int   stack_get_i(const astack_t *s, int i);
-void *stack_get_p(const astack_t *s, int i);
-bool  stack_get_b(const astack_t *s, int i);
-void  stack_pop(astack_t *s);
-
-enum {
-    ACTION_TOUCH_IMAGE    = 1 << 0,  // Push the undo history.
-    // Toggle actions accept and return a boolean value.
-    ACTION_TOGGLE         = 1 << 1,
-};
-
-// Represent an action.
-typedef struct action action_t;
-struct action {
-    const char      *id;            // Globally unique id.
-    const char      *help;          // Help text.
-    int             flags;
-    const char      *shortcut;      // Optional shortcut.
-    int             icon;           // Optional icon id.
-    int             (*func)(const action_t *a, astack_t *s);
-    void            *data;
-
-    // cfunc and csig can be used to directly call any function.
-    void            *cfunc;
-    const char      *csig;
-
-    // Used for export / import actions.
-    struct {
-        const char  *name;
-        const char  *ext;
-    } file_format;
-};
-
-void action_register(const action_t *action);
-const action_t *action_get(const char *id);
-int action_exec(const action_t *action, const char *sig, ...);
-int action_execv(const action_t *action, const char *sig, va_list ap);
-void actions_iter(int (*f)(const action_t *action, void *user), void *user);
-
-// Convenience macro to call action_exec directly from an action id.
-#define action_exec2(id, sig, ...) \
-    action_exec(action_get(id), sig, ##__VA_ARGS__)
-
-
-// Convenience macro to register an action from anywere in a c file.
-#define ACTION_REGISTER(id_, ...) \
-    static const action_t GOX_action_##id_ = {.id = #id_, __VA_ARGS__}; \
-    static void GOX_register_action_##id_(void) __attribute__((constructor)); \
-    static void GOX_register_action_##id_(void) { \
-        action_register(&GOX_action_##id_); \
-    }
-
-// #############################
-
-
 // All the icons positions inside icon.png (as Y*8 + X + 1).
 enum {
     ICON_NULL = 0,
 
     ICON_TOOL_BRUSH = 1,
-    ICON_TOOL_SHAPE = 2,
-    ICON_TOOL_LASER = 3,
+    ICON_TOOL_PICK = 2,
+    ICON_TOOL_SHAPE = 3,
     ICON_TOOL_PLANE = 4,
-    ICON_TOOL_MOVE = 5,
-    ICON_TOOL_PICK = 6,
-    ICON_TOOL_SELECTION = 7,
-    ICON_TOOL_PROCEDURAL = 8,
+    ICON_TOOL_LASER = 5,
+    ICON_TOOL_MOVE = 6,
+    ICON_TOOL_EXTRUDE = 7,
 
     ICON_MODE_ADD = 9,
     ICON_MODE_SUB = 10,
     ICON_MODE_PAINT = 11,
-    ICON_TOOL_EXTRUDE = 12,
+    ICON_SHAPE_CUBE = 12,
+    ICON_SHAPE_SPHERE = 13,
+    ICON_SHAPE_CYLINDER = 14,
+    ICON_TOOL_SELECTION = 15,
 
-    ICON_SHAPE_SPHERE = 17,
-    ICON_SHAPE_CUBE = 18,
-    ICON_SHAPE_CYLINDER = 19,
+    ICON_ADD = 17,
+    ICON_REMOVE = 18,
+    ICON_ARROW_BACK = 19,
+    ICON_ARROW_FORWARD = 20,
+    ICON_LINK = 21,
+    ICON_MENU = 22,
+    ICON_DELETE = 23,
+    ICON_TOOL_PROCEDURAL = 24,
 
-    ICON_ADD = 25,
-    ICON_REMOVE = 26,
+    ICON_VISIBILITY = 25,
+    ICON_VISIBILITY_OFF = 26,
     ICON_ARROW_DOWNWARD = 27,
     ICON_ARROW_UPWARD = 28,
-    ICON_VISIBILITY = 29,
-    ICON_VISIBILITY_OFF = 30,
-    ICON_EDIT = 31,
-    ICON_LINK = 32,
+    ICON_EDIT = 29,
+    ICON_COPY = 30,
+    ICON_GALLERY = 31,
+    ICON_INFO = 32,
+
+    ICON_SETTINGS = 33,
+    ICON_CLOUD = 34,
+    ICON_SHAPE = 35,
+
+    ICON_TOOLS = 41,
+    ICON_PALETTE = 42,
+    ICON_LAYERS = 43,
+    ICON_RENDER = 44,
+    ICON_CAMERA = 45,
+    ICON_IMAGE = 46,
+    ICON_EXPORT = 47,
+    ICON_DEBUG = 48,
+
+    ICON_VIEW = 49,
+    ICON_MATERIAL = 50,
 };
 
+/*
+ * Some icons have their color blended depending on the style.  We define
+ * them with a range in the icons atlas:
+ */
+#define ICON_COLORIZABLE_START 17
+#define ICON_COLORIZABLE_END   41
 
 // #### Tool/Operation/Painter #
 
@@ -769,9 +779,6 @@ extern shape_t shape_cylinder;
 // The block size can only be 16.
 #define BLOCK_SIZE 16
 #define VOXEL_TEXTURE_SIZE 8
-// Number of sub position per voxel in the marching
-// cube rendering.
-#define MC_VOXEL_SUB_POS 8 // XXX: try to make it higher (up to 16!)
 
 // Structure used for the OpenGL array data of blocks.
 // XXX: we can probably make it smaller.
@@ -826,6 +833,7 @@ typedef struct painter {
     uint8_t         color[4];
     float           smoothness;
     int             symmetry; // bitfield X Y Z
+    float           symmetry_origin[3];
     float           (*box)[4][4];     // Clipping box (can be null)
 } painter_t;
 
@@ -903,19 +911,36 @@ int mesh_select(const mesh_t *mesh,
 void mesh_merge(mesh_t *mesh, const mesh_t *other, int mode,
                 const uint8_t color[4]);
 
+/*
+ * Function: mesh_generate_vertices
+ * Generate a vertice array for rendering a mesh block.
+ *
+ * Parameters:
+ *   mesh       - Input mesh.
+ *   block_pos  - Position of the mesh block to render.
+ *   effects    - Effect flags.
+ *   out        - Output array.
+ *   size       - Output the size of a single face.
+ *                4 for quads and 3 for triangles.  Normal mesh uses quad
+ *                but marching cube effect return triangle arrays.
+ *   subdivide  - Ouput the number of subdivisions used for a voxel.  Normal
+ *                render uses 1 unit per voxel, but marching cube rendering
+ *                can use more.
+ */
 int mesh_generate_vertices(const mesh_t *mesh, const int block_pos[3],
-                           int effects, voxel_vertex_t *out);
+                           int effects, voxel_vertex_t *out,
+                           int *size, int *subdivide);
 
 // XXX: use int[2][3] for the box?
 void mesh_crop(mesh_t *mesh, const float box[4][4]);
 
-/* Function: mesh_crc32
- * Compute the crc32 of the mesh data as an array of xyz rgba values.
+/* Function: mesh_crc64
+ * Compute the crc64 of the mesh data as an array of xyz rgba values.
  *
  * This is only used in the tests, to make sure that we can still open
  * old file formats.
  */
-uint32_t mesh_crc32(const mesh_t *mesh);
+uint64_t mesh_crc64(const mesh_t *mesh);
 
 // #### Renderer ###############
 
@@ -934,9 +959,10 @@ enum {
     EFFECT_NO_SHADING       = 1 << 10,
     EFFECT_STRIP            = 1 << 11,
     EFFECT_WIREFRAME        = 1 << 12,
+    EFFECT_GRID             = 1 << 13,
 
-    EFFECT_PROJ_SCREEN      = 1 << 13, // Image project in screen.
-    EFFECT_ANTIALIASING     = 1 << 14,
+    EFFECT_PROJ_SCREEN      = 1 << 14, // Image project in screen.
+    EFFECT_ANTIALIASING     = 1 << 15,
 };
 
 typedef struct {
@@ -1187,18 +1213,51 @@ typedef struct inputs
     int         framebuffer; // Screen framebuffer
 } inputs_t;
 
+// Conveniance function to add a char in the inputs.
+void inputs_insert_char(inputs_t *inputs, uint32_t c);
 
 
-// #### Mouse gestures #####################################3
+/* #########################################
+ * Section: Mouse gestures
+ * Detect 2d mouse or touch gestures.
+ *
+ * The way it works is that we have to create one instance of
+ * <gesture_t> per gesture we can recognise, and then use the
+ * <gesture_update> function to update their states and call the callback
+ * functions of active gestures.
+ */
 
+/* XXX: This part of the code is not very clear */
+
+/*
+ * Enum: GESTURE_TYPES
+ * Define the different types of recognised gestures.
+ *
+ * GESTURE_DRAG     - Click and drag the mouse.
+ * GESTURE_CLICK    - Single click.
+ * GESTURE_PINCH    - Two fingers pinch.
+ * GESTURE_HOVER    - Move the mouse without clicking.
+ */
 enum {
-    // Supported type of gestures.
     GESTURE_DRAG        = 1 << 0,
     GESTURE_CLICK       = 1 << 1,
     GESTURE_PINCH       = 1 << 2,
     GESTURE_HOVER       = 1 << 3,
+};
 
-    // Gesture states.
+/*
+ * Enum: GESTURE_STATES
+ * Define the states a gesture can be in.
+ *
+ * GESTURE_POSSIBLE     - The gesture is not recognised yet (default state).
+ * GESTURE_RECOGNISED   - The gesture has been recognised.
+ * GESTURE_BEGIN        - The gesture has begun.
+ * GESTURE_UPDATE       - The gesture is in progress.
+ * GESTURE_END          - The testure has ended.
+ * GESTURE_TRIGGERED    - For click gestures: the gesture has occured.
+ * GESTURE_FAILED       - The gesture has failed.
+ */
+enum {
     GESTURE_POSSIBLE = 0,
     GESTURE_RECOGNISED,
     GESTURE_BEGIN,
@@ -1208,6 +1267,10 @@ enum {
     GESTURE_FAILED,
 };
 
+/*
+ * Type: gesture_t
+ * Structure used to handle a given gesture.
+ */
 typedef struct gesture gesture_t;
 struct gesture
 {
@@ -1222,6 +1285,18 @@ struct gesture
     int     (*callback)(const gesture_t *gest, void *user);
 };
 
+/*
+ * Function: gesture_update
+ * Update the state of a list of gestures, and call the gestures
+ * callbacks as needed.
+ *
+ * Parameters:
+ *   nb         - Number of gestures.
+ *   gestures   - A pointer to an array of <gesture_t> instances.
+ *   inputs     - The inputs structure.
+ *   viewport   - Current viewport rect.
+ *   user       - User data pointer, passed to the callbacks.
+ */
 int gesture_update(int nb, gesture_t *gestures[],
                    const inputs_t *inputs, const float viewport[4],
                    void *user);
@@ -1325,6 +1400,12 @@ void camera_get_ray(const camera_t *camera, const float win[2],
  */
 void camera_fit_box(camera_t *camera, const float box[4][4]);
 
+/*
+ * Function: camera_get_key
+ * Return a value that is guarantied to change when the camera change.
+ */
+uint64_t camera_get_key(const camera_t *camera);
+
 typedef struct history history_t;
 
 typedef struct layer layer_t;
@@ -1341,6 +1422,10 @@ struct layer {
     // For clone layers:
     int         base_id;
     uint64_t    base_mesh_key;
+    // For shape layers.
+    const shape_t *shape;
+    uint64_t    shape_key;
+    uint8_t     color[4];
 };
 
 typedef struct image image_t;
@@ -1352,9 +1437,10 @@ struct image {
     float    box[4][4];
 
     // For saving.
-    char    *path;
-    int     export_width;
-    int     export_height;
+    char     *path;
+    int      export_width;
+    int      export_height;
+    uint64_t saved_key;     // image_get_key() value of saved file.
 
     image_t *history;
     image_t *history_next, *history_prev;
@@ -1371,6 +1457,12 @@ void image_history_push(image_t *img);
 void image_undo(image_t *img);
 void image_redo(image_t *img);
 bool image_layer_can_edit(const image_t *img, const layer_t *layer);
+
+/*
+ * Function: image_get_key
+ * Return a value that is guarantied to change when the image change.
+ */
+uint64_t image_get_key(const image_t *img);
 
 // ##### Procedural rendering ########################
 
@@ -1399,13 +1491,7 @@ int proc_parse(const char *txt, gox_proc_t *proc);
 void proc_release(gox_proc_t *proc);
 int proc_start(gox_proc_t *proc, const float box[4][4]);
 int proc_stop(gox_proc_t *proc);
-int proc_iter(gox_proc_t *proc);
-
-// Get the list of programs saved in data/procs.
-int proc_list_examples(void (*f)(int index,
-                                 const char *name, const char *code,
-                                 void *user), void *user);
-
+int proc_iter(gox_proc_t *proc, mesh_t *mesh, const painter_t *painter);
 
 // Represent a 3d cursor.
 // The program keeps track of two cursors, that are then used by the tools.
@@ -1456,7 +1542,7 @@ struct tool {
     const char *action_id;
     int (*iter_fn)(tool_t *tool, const float viewport[4]);
     int (*gui_fn)(tool_t *tool);
-    const char *shortcut;
+    const char *default_shortcut;
     int state; // XXX: to be removed I guess.
     int flags;
 };
@@ -1477,14 +1563,12 @@ int tool_iter(tool_t *tool, const float viewport[4]);
 int tool_gui(tool_t *tool);
 
 int tool_gui_snap(void);
-int tool_gui_mode(void);
-int tool_gui_shape(void);
+int tool_gui_shape(const shape_t **shape);
 int tool_gui_radius(void);
 int tool_gui_smoothness(void);
 int tool_gui_color(void);
 int tool_gui_symmetry(void);
-
-
+int tool_gui_drag_mode(int *mode);
 
 typedef struct goxel
 {
@@ -1508,7 +1592,6 @@ typedef struct goxel
     float      snap_offset;  // Only for brush tool, remove that?
 
     float      plane[4][4];         // The snapping plane.
-    bool       plane_hidden;  // Set to true to hide the plane.
     bool       show_export_viewport;
 
     camera_t   camera;
@@ -1517,6 +1600,7 @@ typedef struct goxel
     uint8_t    back_color[4];
     uint8_t    grid_color[4];
     uint8_t    image_box_color[4];
+    bool       hide_box;
 
     texture_t  *pick_fbo;
     painter_t  painter;
@@ -1531,6 +1615,7 @@ typedef struct goxel
     // Some state for the tool iter functions.
     float      tool_plane[4][4];
     bool       tool_shape_two_steps; // Param of the shape tool.
+    int        tool_drag_mode; // 0: move, 1: resize.
 
     float      selection[4][4];   // The selection box.
 
@@ -1539,8 +1624,6 @@ typedef struct goxel
         float  pos[2];
         float  camera_ofs[3];
     } move_origin;
-
-    gox_proc_t proc;        // The current procedural rendering (if any).
 
     palette_t  *palettes;   // The list of all the palettes
     palette_t  *palette;    // The current color palette
@@ -1551,69 +1634,64 @@ typedef struct goxel
     double     frame_time;  // Clock time at beginning of the frame (sec)
     double     fps;         // Average fps.
     bool       quit;        // Set to true to quit the application.
+    bool       show_wireframe; // Show debug wireframe on meshes.
 
     struct {
         gesture_t drag;
         gesture_t pan;
         gesture_t rotate;
         gesture_t hover;
+        gesture_t pinch;
     } gestures;
 
     // Hold info about the cycles rendering task.
     struct {
-        int status;
+        int status;         // 0: stopped, 1: running, 2: finished.
         uint8_t *buf;       // RGBA buffer.
         int w, h;           // Size of the buffer.
         char output[1024];  // Output path.
         float progress;
-    } export_task;
+        bool force_restart;
+    } render_task;
 
+    // Used to check if the active mesh changed to play tick sound.
+    uint64_t    last_mesh_key;
+    double      last_click_time;
 } goxel_t;
 
 // the global goxel instance.
-extern goxel_t *goxel;
+extern goxel_t goxel;
 
-void goxel_init(goxel_t *goxel);
-void goxel_release(goxel_t *goxel);
-void goxel_iter(goxel_t *goxel, inputs_t *inputs);
-void goxel_render(goxel_t *goxel);
-void goxel_render_view(goxel_t *goxel, const float viewport[4]);
+// XXX: add some doc.
+void goxel_init(void);
+void goxel_release(void);
+void goxel_reset(void);
+int goxel_iter(inputs_t *inputs);
+void goxel_render(void);
+void goxel_render_view(const float viewport[4]);
 void goxel_render_export_view(const float viewport[4]);
 // Called by the gui when the mouse hover a 3D view.
 // XXX: change the name since we also call it when the mouse get out of
 // the view.
-void goxel_mouse_in_view(goxel_t *goxel, const float viewport[4],
-                         const inputs_t *inputs);
+void goxel_mouse_in_view(const float viewport[4], const inputs_t *inputs,
+                         bool capture_keys);
 
-int goxel_unproject(goxel_t *goxel, const float viewport[4],
-                    const float pos[2], int snap_mask, float offset,
-                    float out[3], float normal[3]);
-
-bool goxel_unproject_on_mesh(goxel_t *goxel, const float viewport[4],
-                     const float pos[2], mesh_t *mesh,
-                     float out[3], float normal[3]);
-
-bool goxel_unproject_on_plane(goxel_t *goxel, const float viewport[4],
-                     const float pos[2], const float plane[4][4],
-                     float out[3], float normal[3]);
-bool goxel_unproject_on_box(goxel_t *goxel, const float viewport[4],
-                     const float pos[2], const float box[4][4], bool inside,
-                     float out[3], float normal[3], int *face);
 // Recompute the meshes.  mask from MESH_ enum.
-void goxel_update_meshes(goxel_t *goxel, int mask);
+void goxel_update_meshes(int mask);
 
-void goxel_set_help_text(goxel_t *goxel, const char *msg, ...);
-void goxel_set_hint_text(goxel_t *goxel, const char *msg, ...);
+void goxel_set_help_text(const char *msg, ...);
+void goxel_set_hint_text(const char *msg, ...);
 
-void goxel_import_image_plane(goxel_t *goxel, const char *path);
+void goxel_import_image_plane(const char *path);
 
 // Render the view into an RGB[A] buffer.
 void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp);
 
+
 // #############################
 
-void save_to_file(goxel_t *goxel, const char *path, bool with_preview);
-int load_from_file(goxel_t *goxel, const char *path);
+void save_to_file(const image_t *img, const char *path, bool with_preview);
+int load_from_file(const char *path);
 
 // Iter info of a gox file, without actually reading it.
 // For the moment only returns the image preview if available.
@@ -1627,90 +1705,19 @@ int gox_iter_infos(const char *path,
 void hsl_to_rgb(const uint8_t hsl[3], uint8_t rgb[3]);
 void rgb_to_hsl(const uint8_t rgb[3], uint8_t hsl[3]);
 
-// #### Gui ####################
-
-#define THEME_SIZES(X) \
-    X(item_height) \
-    X(icons_height) \
-    X(item_padding_h) \
-    X(item_rounding) \
-    X(item_spacing_h) \
-    X(item_spacing_v) \
-    X(item_inner_spacing_h)
-
-
-enum {
-    THEME_GROUP_BASE,
-    THEME_GROUP_WIDGET,
-    THEME_GROUP_TAB,
-    THEME_GROUP_MENU,
-    THEME_GROUP_COUNT
-};
-
-enum {
-    THEME_COLOR_BACKGROUND,
-    THEME_COLOR_OUTLINE,
-    THEME_COLOR_INNER,
-    THEME_COLOR_INNER_SELECTED,
-    THEME_COLOR_TEXT,
-    THEME_COLOR_TEXT_SELECTED,
-    THEME_COLOR_COUNT
-};
-
-typedef struct {
-    const char *name;
-    int parent;
-    bool colors[THEME_COLOR_COUNT];
-} theme_group_info_t;
-extern theme_group_info_t THEME_GROUP_INFOS[THEME_GROUP_COUNT];
-
-typedef struct {
-    const char *name;
-} theme_color_info_t;
-extern theme_color_info_t THEME_COLOR_INFOS[THEME_COLOR_COUNT];
-
-typedef struct {
-    uint8_t colors[THEME_COLOR_COUNT][4];
-} theme_group_t;
-
-typedef struct theme theme_t;
-struct theme {
-    char name[64];
-
-    struct {
-        int  item_height;
-        int  icons_height;
-        int  item_padding_h;
-        int  item_rounding;
-        int  item_spacing_h;
-        int  item_spacing_v;
-        int  item_inner_spacing_h;
-    } sizes;
-
-    theme_group_t groups[THEME_GROUP_COUNT];
-
-    theme_t *prev, *next; // Global list of themes.
-};
-
-// Return the current theme.
-theme_t *theme_get(void);
-theme_t *theme_get_list(void);
-void theme_revert_default(void);
-void theme_save(void);
-void theme_get_color(int group, int color, bool selected, uint8_t out[4]);
-void theme_set(const char *name);
-
 /* ################################
  * Section: Gui
  */
 
 void gui_release(void);
-void gui_iter(goxel_t *goxel, const inputs_t *inputs);
+void gui_iter(const inputs_t *inputs);
 void gui_render(void);
 
 // Gui widgets:
+bool gui_collapsing_header(const char *label);
 void gui_text(const char *label, ...);
 bool gui_button(const char *label, float w, int icon);
+bool gui_button_right(const char *label, int icon);
 void gui_group_begin(const char *label);
 void gui_group_end(void);
 bool gui_checkbox(const char *label, bool *v, const char *hint);
@@ -1736,7 +1743,17 @@ float gui_get_avail_width(void);
 void gui_same_line(void);
 void gui_enabled_begin(bool enabled);
 void gui_enabled_end(void);
+// Add an icon in top left corner of last item.
+void gui_floating_icon(int icon);
+
 void gui_alert(const char *title, const char *msg);
+
+void gui_columns(int count);
+void gui_next_column(void);
+void gui_separator(void);
+
+void gui_push_id(const char *id);
+void gui_pop_id(void);
 
 enum {
     GUI_POPUP_FULL      = 1 << 0,
@@ -1811,20 +1828,51 @@ void *cache_get(cache_t *cache, const void *key, int keylen);
 
 // ####### Sound #################################
 void sound_init(void);
-void sound_play(const char *sound);
+void sound_play(const char *sound, float volume, float pitch);
 void sound_iter(void);
+
+bool sound_is_enabled(void);
+void sound_set_enabled(bool v);
 
 // Section: cycles
 void cycles_init(void);
 void cycles_release(void);
 void cycles_render(uint8_t *buffer, int *w, int *h, const camera_t *cam,
-                   float *progress);
+                   float *progress, bool force_restart);
+
+// Section: box_edit
+/*
+ * Function: gox_edit
+ * Render a box that can be edited with the mouse.
+ *
+ * This is used for the move and selection tools.
+ * Still a bit experimental.  In theory we should be able to edit any box,
+ * but because of the snap mechanism, we can only edit the layer or selection
+ * for the moment.
+ *
+ * Parameters:
+ *   snap   - SNAP_LAYER_OUT for layer edit, SNAP_SELECTION_OUT for selection
+ *            edit.
+ *   mode   - 0: move, 1: resize.
+ *   transf - Receive the output transformation.
+ *   first  - Set to true if the edit is the first one.
+ */
+int box_edit(int snap, int mode, float transf[4][4], bool *first);
 
 // Section: tests
 
 /* Function: tests_run
  * Run all the unit tests */
 void tests_run(void);
+
+// Section: script
+
+/*
+ * Function: script_run
+ * Run a lua script from a file.
+ */
+int script_run(const char *filename, int argc, const char **argv);
+
 
 
 #endif // GOXEL_H
