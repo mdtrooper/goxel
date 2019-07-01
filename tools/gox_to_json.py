@@ -55,6 +55,8 @@ def read_dict_from_data(data):
     return data, {key: value}
 
 def gox_to_json(filename):
+    index = 0
+    
     file_dict = {}
     file_dict['goxel_version'] = '0.7.3'
     try:
@@ -88,6 +90,9 @@ def gox_to_json(filename):
                         data, data_dict = read_dict_from_data(data)
                         key = list(data_dict.keys())[0]
                         chunk[key] = []
+                        # ~ with open('test.png', 'wb') as img:
+                            # ~ img.write(data_dict[key])
+                        # ~ print("{} {} {} {}".format('data_dict[key]', len(data_dict[key]), type(data_dict[key]), data_dict[key]))
                         for i in range(0, 4):
                             chunk[key].append(unpack('ffff', data_dict[key][:4*4]))
                             data_dict[key] = data_dict[key][4*4:]
@@ -122,11 +127,8 @@ def gox_to_json(filename):
                             bit_pixel_png, *_ = unpack('b', data_png_chunk[:1])
                         if type_png_chunk == 'IDAT':
                             chunk['data'] = data_png_chunk
-                            if 'index' not in locals():
-                                index = 0
-                            else:
-                                index += 1
                             chunk['index'] = index
+                            index += 1
                 if chunk['type'] == 'LAYR':
                     num_blocks, *_ = unpack('<i', data[:4])
                     data = data[4:]
@@ -134,7 +136,7 @@ def gox_to_json(filename):
                     chunk['blocks'] = []
                     count_blocks = 0
                     while count_blocks < num_blocks:
-                        index, *_ = unpack('<i', data[:4])
+                        index_BL16, *_ = unpack('<i', data[:4])
                         data = data[4:]
                         
                         x, y, z = unpack('<iii', data[:4*3])
@@ -144,7 +146,7 @@ def gox_to_json(filename):
                         
                         # TODO: Get the v from BL16
                         
-                        chunk['blocks'].append({'index': index, 'x': x, 'y': y, 'z': z, 'v': None})
+                        chunk['blocks'].append({'index': index_BL16, 'x': x, 'y': y, 'z': z, 'v': None})
                         count_blocks += 1
                     
                     chunk['data'] = []
