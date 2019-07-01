@@ -4,6 +4,7 @@ meta:
   license: GPL3
   title: Goxel default store file
   endian: le
+
 doc: |
   Goxel is a 3D editor for voxel scenes.
 
@@ -14,6 +15,8 @@ seq:
     type: header
   - id: img
     type: img
+  - id: bl16
+    type: bl16
 
 types:
   header:
@@ -28,3 +31,11 @@ types:
         contents: 'IMG '
       - id: length
         type: u4
+      - id: data
+        size: length
+      - id: crc
+        type: u4A
+  bl16:
+    seq:
+      - id: magic
+        contents: 'BL16'
