@@ -26,3 +26,5 @@ types:
     seq:
       - id: magic
         contents: 'IMG '
+      - id: length
+        type: u4
