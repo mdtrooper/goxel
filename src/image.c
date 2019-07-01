@@ -18,6 +18,8 @@
 
 #include "goxel.h"
 
+#include <zlib.h> // For crc32
+
 /* History
     the images undo history is stored in a linked list.  Every time we call
     image_history_push, we add the current image snapshot in the list.
@@ -48,6 +50,60 @@
 
 */
 
+
+static bool material_name_exists(void *user, const char *name)
+{
+    const image_t *img = user;
+    const material_t *m;
+    DL_FOREACH(img->materials, m) {
+        if (strcasecmp(m->name, name) == 0) return true;
+    }
+    return false;
+}
+
+static bool layer_name_exists(void *user, const char *name)
+{
+    const image_t *img = user;
+    const layer_t *layer;
+    DL_FOREACH(img->layers, layer) {
+        if (strcasecmp(layer->name, name) == 0) return true;
+    }
+    return false;
+}
+
+static bool camera_name_exists(void *user, const char *name)
+{
+    const image_t *img = user;
+    const camera_t *cam;
+    DL_FOREACH(img->cameras, cam) {
+        if (strcasecmp(cam->name, name) == 0) return true;
+    }
+    return false;
+}
+
+static void make_uniq_name(
+        char *buf, int size, const char *base, void *user,
+        bool (*name_exists)(void *user, const char *name))
+{
+    int i = 1, n, len;
+    const char *ext;
+
+    // If base if of the form 'abc.<num>' then we turn it into 'abc'
+    len = strlen(base);
+    ext = strrchr(base, '.');
+    if (ext) {
+        if (sscanf(ext, ".%d%*c", &n) == 1) {
+            len -= strlen(ext);
+            i = n;
+        }
+    }
+
+    for (;; i++) {
+        snprintf(buf, size, "%.*s.%d", len, base, i);
+        if (!name_exists(user, buf)) break;
+    }
+}
+
 static layer_t *img_get_layer(const image_t *img, int id)
 {
     layer_t *layer;
@@ -70,37 +126,6 @@ static int img_get_new_id(const image_t *img)
     return id;
 }
 
-static layer_t *layer_new(const image_t *img, const char *name)
-{
-    layer_t *layer;
-    layer = calloc(1, sizeof(*layer));
-    // XXX: potential bug here.
-    strncpy(layer->name, name, sizeof(layer->name));
-    layer->mesh = mesh_new();
-    mat4_set_identity(layer->mat);
-    layer->id = img_get_new_id(img);
-    return layer;
-}
-
-static layer_t *layer_copy(layer_t *other)
-{
-    layer_t *layer;
-    layer = calloc(1, sizeof(*layer));
-    memcpy(layer->name, other->name, sizeof(layer->name));
-    layer->visible = other->visible;
-    layer->mesh = mesh_copy(other->mesh);
-    layer->image = texture_copy(other->image);
-    mat4_copy(other->box, layer->box);
-    mat4_copy(other->mat, layer->mat);
-    layer->id = other->id;
-    layer->base_id = other->base_id;
-    layer->base_mesh_key = other->base_mesh_key;
-    layer->shape = other->shape;
-    layer->shape_key = other->shape_key;
-    memcpy(layer->color, other->color, sizeof(layer->color));
-    return layer;
-}
-
 static layer_t *layer_clone(layer_t *other)
 {
     int len;
@@ -109,6 +134,7 @@ static layer_t *layer_clone(layer_t *other)
     len = sizeof(layer->name) - 1 - strlen(" clone");
     snprintf(layer->name, sizeof(layer->name), "%.*s clone", len, other->name);
     layer->visible = other->visible;
+    layer->material = other->material;
     layer->mesh = mesh_copy(other->mesh);
     mat4_set_identity(layer->mat);
     layer->base_id = other->id;
@@ -120,7 +146,7 @@ static layer_t *layer_clone(layer_t *other)
 void image_update(image_t *img)
 {
     painter_t painter = {};
-    uint64_t key;
+    uint32_t key;
     layer_t *layer, *base;
 
     DL_FOREACH(img->layers, layer) {
@@ -131,9 +157,9 @@ void image_update(image_t *img)
             layer->base_mesh_key = mesh_get_key(base->mesh);
         }
         if (layer->shape) {
-            key = crc64(0, layer->mat, sizeof(layer->mat));
-            key = crc64(key, layer->shape, sizeof(layer->shape));
-            key = crc64(key, layer->color, sizeof(layer->color));
+            key = crc32(0, (void*)layer->mat, sizeof(layer->mat));
+            key = crc32(key, (void*)layer->shape, sizeof(layer->shape));
+            key = crc32(key, (void*)layer->color, sizeof(layer->color));
             if (key != layer->shape_key) {
                 painter.mode = MODE_OVER;
                 painter.shape = layer->shape;
@@ -147,26 +173,6 @@ void image_update(image_t *img)
     }
 }
 
-static void layer_delete(layer_t *layer)
-{
-    mesh_delete(layer->mesh);
-    texture_delete(layer->image);
-    free(layer);
-}
-
-static uint64_t layer_get_key(const layer_t *layer)
-{
-    uint64_t key;
-    key = mesh_get_key(layer->mesh);
-    key = crc64(key, &layer->visible, sizeof(layer->visible));
-    key = crc64(key, &layer->name, sizeof(layer->name));
-    key = crc64(key, &layer->box, sizeof(layer->box));
-    key = crc64(key, &layer->mat, sizeof(layer->mat));
-    key = crc64(key, &layer->shape, sizeof(layer->shape));
-    key = crc64(key, &layer->color, sizeof(layer->color));
-    return key;
-}
-
 image_t *image_new(void)
 {
     layer_t *layer;
@@ -175,8 +181,12 @@ image_t *image_new(void)
     bbox_from_aabb(img->box, aabb);
     img->export_width = 1024;
     img->export_height = 1024;
-    layer = layer_new(img, "background");
+    image_add_material(img, NULL);
+    image_add_camera(img, NULL);
+    layer = image_add_layer(img, NULL);
     layer->visible = true;
+    layer->id = img_get_new_id(img);
+    layer->material = img->active_material;
     DL_APPEND(img->layers, layer);
     DL_APPEND2(img->history, img, history_prev, history_next);
     img->active_layer = layer;
@@ -185,12 +195,19 @@ image_t *image_new(void)
     return img;
 }
 
+/*
+ * Generate a copy of the image that can be put into the history.
+ */
 static image_t *image_snap(image_t *other)
 {
     image_t *img;
     layer_t *layer, *other_layer;
+    camera_t *camera, *other_camera;
+    material_t *material, *other_material;
+
     img = calloc(1, sizeof(*img));
     *img = *other;
+
     img->layers = NULL;
     img->active_layer = NULL;
     DL_FOREACH(other->layers, other_layer) {
@@ -199,39 +216,85 @@ static image_t *image_snap(image_t *other)
         if (other_layer == other->active_layer)
             img->active_layer = layer;
     }
-    img->history_next = img->history_prev = NULL;
     assert(img->active_layer);
+
+    img->cameras = NULL;
+    img->active_camera = NULL;
+    DL_FOREACH(other->cameras, other_camera) {
+        camera = camera_copy(other_camera);
+        DL_APPEND(img->cameras, camera);
+        if (other_camera == other->active_camera)
+            img->active_camera = camera;
+    }
+
+    img->materials = NULL;
+    img->active_material = NULL;
+    DL_FOREACH(other->materials, other_material) {
+        material = material_copy(other_material);
+        DL_APPEND(img->materials, material);
+        if (other_material == other->active_material)
+            img->active_material = material;
+        DL_FOREACH(img->layers, layer) {
+            if (layer->material == other_material)
+                layer->material = material;
+        }
+    }
+
+    img->history = img->history_next = img->history_prev = NULL;
     return img;
 }
 
 
-static void image_delete_camera(image_t *img, camera_t *cam);
-
 void image_delete(image_t *img)
 {
-    if (!img) return;
     image_t *hist, *snap, *snap_tmp;
-    layer_t *layer, *layer_tmp;
-    while (img->cameras)
-        image_delete_camera(img, img->cameras);
-    free(img->path);
+    camera_t *cam;
+    layer_t *layer;
+    material_t *mat;
+
+    if (!img) return;
+
+    while ((layer = img->layers)) {
+        DL_DELETE(img->layers, layer);
+        layer_delete(layer);
+    }
+    while ((cam = img->cameras)) {
+        DL_DELETE(img->cameras, cam);
+        camera_delete(cam);
+    }
+    while ((mat = img->materials)) {
+        DL_DELETE(img->materials, mat);
+        material_delete(mat);
+    }
+
+    // Path is shared between images and snaps!
+    // XXX: find a better way.
+    if (img->history) {
+        free(img->path);
+        img->path = NULL;
+    }
+
     hist = img->history;
     DL_FOREACH_SAFE2(hist, snap, snap_tmp, history_next) {
-        DL_FOREACH_SAFE(snap->layers, layer, layer_tmp) {
-            DL_DELETE(snap->layers, layer);
-            layer_delete(layer);
-        }
+        if (snap == img) continue;
         DL_DELETE2(hist, snap, history_prev, history_next);
-        free(snap);
+        image_delete(snap);
     }
+
+    free(img);
 }
 
-layer_t *image_add_layer(image_t *img)
+layer_t *image_add_layer(image_t *img, layer_t *layer)
 {
-    layer_t *layer;
     img = img ?: goxel.image;
-    layer = layer_new(img, "unnamed");
+    if (!layer) {
+        layer = layer_new(NULL);
+        make_uniq_name(layer->name, sizeof(layer->name), "Layer", img,
+                       layer_name_exists);
+    }
     layer->visible = true;
+    layer->id = img_get_new_id(img);
+    layer->material = img->active_material;
     DL_APPEND(img->layers, layer);
     img->active_layer = layer;
     return layer;
@@ -241,7 +304,7 @@ layer_t *image_add_shape_layer(image_t *img)
 {
     layer_t *layer;
     img = img ?: goxel.image;
-    layer = layer_new(img, "shape");
+    layer = layer_new("shape");
     layer->visible = true;
     layer->shape = &shape_sphere;
     vec4_copy(goxel.painter.color, layer->color);
@@ -252,6 +315,7 @@ layer_t *image_add_shape_layer(image_t *img)
         vec3_copy(img->box[3], layer->mat[3]);
         mat4_iscale(layer->mat, 4, 4, 4);
     }
+    layer->id = img_get_new_id(img);
     DL_APPEND(img->layers, layer);
     img->active_layer = layer;
     return layer;
@@ -274,8 +338,9 @@ void image_delete_layer(image_t *img, layer_t *layer)
 
     layer_delete(layer);
     if (img->layers == NULL) {
-        layer = layer_new(img, "unnamed");
+        layer = layer_new("unnamed");
         layer->visible = true;
+        layer->id = img_get_new_id(img);
         DL_APPEND(img->layers, layer);
     }
     if (!img->active_layer) img->active_layer = img->layers->prev;
@@ -314,8 +379,10 @@ layer_t *image_duplicate_layer(image_t *img, layer_t *other)
     img = img ?: goxel.image;
     other = other ?: img->active_layer;
     layer = layer_copy(other);
-    layer->id = img_get_new_id(img);
+    make_uniq_name(layer->name, sizeof(layer->name), other->name, img,
+                   layer_name_exists);
     layer->visible = true;
+    layer->id = img_get_new_id(img);
     DL_APPEND(img->layers, layer);
     img->active_layer = layer;
     return layer;
@@ -327,8 +394,8 @@ layer_t *image_clone_layer(image_t *img, layer_t *other)
     img = img ?: goxel.image;
     other = other ?: img->active_layer;
     layer = layer_clone(other);
-    layer->id = img_get_new_id(img);
     layer->visible = true;
+    layer->id = img_get_new_id(img);
     DL_APPEND(img->layers, layer);
     img->active_layer = layer;
     return layer;
@@ -367,23 +434,27 @@ void image_merge_visible_layers(image_t *img)
 }
 
 
-camera_t *image_add_camera(image_t *img)
+camera_t *image_add_camera(image_t *img, camera_t *cam)
 {
-    camera_t *cam;
     img = img ?: goxel.image;
-    cam = camera_new("unnamed");
+    if (!cam) {
+        cam = camera_new(NULL);
+        make_uniq_name(cam->name, sizeof(cam->name), "Camera", img,
+                       camera_name_exists);
+    }
     DL_APPEND(img->cameras, cam);
     img->active_camera = cam;
     return cam;
 }
 
-static void image_delete_camera(image_t *img, camera_t *cam)
+void image_delete_camera(image_t *img, camera_t *cam)
 {
     img = img ?: goxel.image;
     cam = cam ?: img->active_camera;
     if (!cam) return;
     DL_DELETE(img->cameras, cam);
-    if (cam == img->active_camera) img->active_camera = NULL;
+    if (cam == img->active_camera)
+        img->active_camera = img->cameras;
     camera_delete(cam);
 }
 
@@ -414,6 +485,34 @@ static void image_move_camera_up(image_t *img, camera_t *cam)
 static void image_move_camera_down(image_t *img, camera_t *cam)
 {
     image_move_camera(img, cam, -1);
+}
+
+material_t *image_add_material(image_t *img, material_t *mat)
+{
+    img = img ?: goxel.image;
+    if (!mat) {
+        mat = material_new(NULL);
+        make_uniq_name(mat->name, sizeof(mat->name), "Material", img,
+                       material_name_exists);
+    }
+    assert(!mat->prev);
+    DL_APPEND(img->materials, mat);
+    img->active_material = mat;
+    return mat;
+}
+
+void image_delete_material(image_t *img, material_t *mat)
+{
+    layer_t *layer;
+
+    img = img ?: goxel.image;
+    mat = mat ?: img->active_material;
+    if (!mat) return;
+    DL_DELETE(img->materials, mat);
+    if (mat == img->active_material) img->active_material = NULL;
+    material_delete(mat);
+    DL_FOREACH(img->layers, layer)
+        if (layer->material == mat) layer->material = NULL;
 }
 
 void image_set(image_t *img, image_t *other)
@@ -449,10 +548,34 @@ void image_history_push(image_t *img)
 {
     image_t *snap = image_snap(img);
     image_t *hist;
-    layer_t *layer, *layer_tmp;
 
     // Discard previous undo.
     while ((hist = img->history_next)) {
+        DL_DELETE2(img->history, hist, history_prev, history_next);
+        assert(hist != img->history_next);
+        image_delete(hist);
+    }
+
+    DL_DELETE2(img->history, img,  history_prev, history_next);
+    DL_APPEND2(img->history, snap, history_prev, history_next);
+    DL_APPEND2(img->history, img,  history_prev, history_next);
+    debug_print_history(img);
+}
+
+void image_history_resize(image_t *img, int size)
+{
+    int i, nb = 0;
+    image_t *hist;
+    layer_t *layer, *layer_tmp;
+
+    // First cound the size of the history to compute how many we are going
+    // to remove.
+    for (hist = img->history; hist != img; hist = hist->history_next) nb++;
+    nb = max(0, nb - size);
+    for (i = 0; i < nb; i++) {
+        hist = img->history;
+
+        // XXX: do that in a function!
         DL_FOREACH_SAFE(hist->layers, layer, layer_tmp) {
             DL_DELETE(hist->layers, layer);
             layer_delete(layer);
@@ -460,11 +583,6 @@ void image_history_push(image_t *img)
         DL_DELETE2(img->history, hist, history_prev, history_next);
         free(hist);
     }
-
-    DL_DELETE2(img->history, img,  history_prev, history_next);
-    DL_APPEND2(img->history, snap, history_prev, history_next);
-    DL_APPEND2(img->history, img,  history_prev, history_next);
-    debug_print_history(img);
 }
 
 // XXX: not clear what this is doing.  We should try to remove it.
@@ -488,7 +606,6 @@ void image_undo(image_t *img)
     DL_DELETE2(img->history, img, history_prev, history_next);
     DL_PREPEND_ELEM2(img->history, prev, img, history_prev, history_next);
     swap(img, prev);
-    goxel_update_meshes(-1);
     debug_print_history(img);
 }
 
@@ -502,7 +619,6 @@ void image_redo(image_t *img)
     DL_DELETE2(img->history, next, history_prev, history_next);
     DL_PREPEND_ELEM2(img->history, img, next, history_prev, history_next);
     swap(img, next);
-    goxel_update_meshes(-1);
     debug_print_history(img);
 }
 
@@ -531,18 +647,24 @@ bool image_layer_can_edit(const image_t *img, const layer_t *layer)
  * Function: image_get_key
  * Return a value that is garantied to change when the image change.
  */
-uint64_t image_get_key(const image_t *img)
+uint32_t image_get_key(const image_t *img)
 {
-    uint64_t key = 0, k;
+    uint32_t key = 0, k;
     layer_t *layer;
     camera_t *camera;
+    material_t *material;
+
     DL_FOREACH(img->layers, layer) {
         k = layer_get_key(layer);
-        key = crc64(key, &k, sizeof(k));
+        key = crc32(key, (void*)&k, sizeof(k));
     }
     DL_FOREACH(img->cameras, camera) {
         k = camera_get_key(camera);
-        key = crc64(key, &k, sizeof(k));
+        key = crc32(key, (void*)&k, sizeof(k));
+    }
+    DL_FOREACH(img->materials, material) {
+        k = material_get_hash(material);
+        key = crc32(key, (void*)&k, sizeof(k));
     }
     return key;
 }
@@ -586,12 +708,13 @@ ACTION_REGISTER(layer_clear,
     .csig = "vpp",
     .icon = ICON_DELETE,
     .flags = ACTION_TOUCH_IMAGE,
+    .default_shortcut = "Delete",
 )
 
 ACTION_REGISTER(img_new_layer,
     .help = "Add a new layer to the image",
     .cfunc = image_add_layer,
-    .csig = "vp",
+    .csig = "vpp",
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ADD,
 )
@@ -666,7 +789,7 @@ ACTION_REGISTER(img_merge_visible_layers,
 ACTION_REGISTER(img_new_camera,
     .help = "Add a new camera to the image",
     .cfunc = image_add_camera,
-    .csig = "vp",
+    .csig = "vpp",
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ADD,
 )
@@ -714,4 +837,20 @@ ACTION_REGISTER(img_new_shape_layer,
     .cfunc = image_add_shape_layer,
     .csig = "vp",
     .flags = ACTION_TOUCH_IMAGE,
+)
+
+ACTION_REGISTER(img_new_material,
+    .help = "Add a new material to the image",
+    .cfunc = image_add_material,
+    .csig = "vpp",
+    .flags = ACTION_TOUCH_IMAGE,
+    .icon = ICON_ADD,
+)
+
+ACTION_REGISTER(img_del_material,
+    .help = "Delete a material",
+    .cfunc = image_delete_material,
+    .csig = "vpp",
+    .flags = ACTION_TOUCH_IMAGE,
+    .icon = ICON_REMOVE,
 )

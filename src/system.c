@@ -16,11 +16,16 @@
  * goxel.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "goxel.h"
+#include "system.h"
+
+#include "noc_file_dialog.h"
+
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <errno.h>
+#include <stdio.h>
+#include <string.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 1024
@@ -38,16 +43,16 @@ sys_callbacks_t sys_callbacks = {};
 
 static const char *get_user_dir(void *user)
 {
-    static char *ret = NULL;
+    static char ret[PATH_MAX] = "";
     const char *home;
-    if (!ret) {
+    if (!*ret) {
         home = getenv("XDG_CONFIG_HOME");
         if (home) {
-            asprintf(&ret, "%s/goxel", home);
+            snprintf(ret, sizeof(ret), "%s/goxel", home);
         } else {
             home = getenv("HOME");
             if (!home) home = getpwuid(getuid())->pw_dir;
-            asprintf(&ret, "%s/.config/goxel", home);
+            snprintf(ret, sizeof(ret), "%s/.config/goxel", home);
         }
     }
     return ret;
@@ -88,6 +93,9 @@ static void init_unix(void)
 #define NOC_FILE_DIALOG_WIN32
 #define NOC_FILE_DIALOG_IMPLEMENTATION
 #include "noc_file_dialog.h"
+
+// Defined in utils.
+int utf_16_to_8(const wchar_t *in16, char *out8, size_t size8);
 
 // On mingw mkdir takes only one argument!
 #define mkdir(p, m) mkdir(p)
@@ -172,7 +180,7 @@ int sys_make_dir(const char *path)
     return 0;
 }
 
-GLuint sys_get_screen_framebuffer(void)
+int sys_get_screen_framebuffer(void)
 {
     return 0;
 }
@@ -181,7 +189,7 @@ void sys_set_window_title(const char *title)
 {
     static char buf[1024] = {};
     if (strcmp(buf, title) == 0) return;
-    strncpy(buf, title, sizeof(buf));
+    snprintf(buf, sizeof(buf), "%s", title);
     if (sys_callbacks.set_window_title)
         sys_callbacks.set_window_title(sys_callbacks.user, title);
 }
@@ -211,4 +219,38 @@ void sys_set_clipboard_text(void *user, const char *text)
 {
     if (sys_callbacks.set_clipboard_text)
         sys_callbacks.set_clipboard_text(sys_callbacks.user, text);
+}
+
+/*
+ * Function: sys_show_keyboard
+ * Show a virtual keyboard if needed.
+ */
+void sys_show_keyboard(bool has_text)
+{
+    if (!sys_callbacks.show_keyboard) return;
+    sys_callbacks.show_keyboard(sys_callbacks.user, has_text);
+}
+
+/*
+ * Function: sys_save_to_photos
+ * Save a png file to the system photo album.
+ */
+int sys_save_to_photos(const uint8_t *data, int size)
+{
+    FILE *file;
+    const char *path;
+    size_t r;
+
+    if (sys_callbacks.save_to_photos)
+        return sys_callbacks.save_to_photos(sys_callbacks.user, data, size);
+
+    // Default implementation.
+    path = noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
+                   "png\0*.png\0", NULL, "untitled.png");
+    if (!path) return 1;
+    file = fopen(path, "wb");
+    if (!file) return -1;
+    r = fwrite(data, size, 1, file);
+    fclose(file);
+    return r == size ? 0 : -1;
 }

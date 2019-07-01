@@ -129,16 +129,18 @@ static void export(const mesh_t *mesh, const char *path, bool ply)
         fprintf(out, "property float x\n");
         fprintf(out, "property float y\n");
         fprintf(out, "property float z\n");
-        fprintf(out, "property uchar red\n");
-        fprintf(out, "property uchar green\n");
-        fprintf(out, "property uchar blue\n");
+        fprintf(out, "property float red\n");
+        fprintf(out, "property float green\n");
+        fprintf(out, "property float blue\n");
         fprintf(out, "element face %d\n", utarray_len(lines_f));
-        fprintf(out, "property list uchar int vertex_index\n");
+        fprintf(out, "property list uchar int vertex_indices\n");
         fprintf(out, "end_header\n");
         while( (line_ptr = (line_t*)utarray_next(lines_v, line_ptr))) {
-            fprintf(out, "%g %g %g %d %d %d\n",
+            fprintf(out, "%g %g %g %f %f %f\n",
                     line_ptr->v[0], line_ptr->v[1], line_ptr->v[2],
-                    line_ptr->c[0], line_ptr->c[1], line_ptr->c[2]);
+                    line_ptr->c[0] / 255.,
+                    line_ptr->c[1] / 255.,
+                    line_ptr->c[2] / 255.);
         }
         while( (line_ptr = (line_t*)utarray_next(lines_f, line_ptr))) {
             if (size == 4) {
@@ -202,7 +204,7 @@ static void export_as_obj(const char *path)
     path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
                     "obj\0*.obj\0", NULL, "untitled.obj");
     if (!path) return;
-    wavefront_export(goxel.layers_mesh, path);
+    wavefront_export(goxel_get_layers_mesh(), path);
 }
 
 ACTION_REGISTER(mesh_export_as_obj,
@@ -230,7 +232,7 @@ static void export_as_ply(const char *path)
     path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
                     "ply\0*.ply\0", NULL, "untitled.ply");
     if (!path) return;
-    ply_export(goxel.layers_mesh, path);
+    ply_export(goxel_get_layers_mesh(), path);
 }
 
 ACTION_REGISTER(mesh_export_as_ply,

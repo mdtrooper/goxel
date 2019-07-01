@@ -19,35 +19,28 @@ import glob
 import os
 import sys
 
+vars = Variables('settings.py')
+vars.AddVariables(
+    EnumVariable('mode', 'Build mode', 'debug',
+        allowed_values=('debug', 'release', 'profile')),
+    BoolVariable('werror', 'Warnings as error', True),
+    BoolVariable('sound', 'Enable sound', False),
+    PathVariable('config_file', 'Config file to use', 'src/config.h'),
+)
+
 target_os = str(Platform())
 
-debug = int(ARGUMENTS.get('debug', 1))
-profile = int(ARGUMENTS.get('profile', 0))
-werror = int(ARGUMENTS.get("werror", 1))
-clang = int(ARGUMENTS.get("clang", 0))
-cycles = int(ARGUMENTS.get('cycles', 1))
-sound = False
-
-if os.environ.get('CC') == 'clang': clang = 1
-if profile: debug = 0
-
-env = Environment(ENV = os.environ)
+env = Environment(variables = vars, ENV = os.environ)
 conf = env.Configure()
 
-if clang:
+if os.environ.get('CC') == 'clang':
     env.Replace(CC='clang', CXX='clang++')
 
 # Asan & Ubsan (need to come first).
-# Cycles doesn't like libasan with clang, so we only use it on
-# C code with clang.
-if debug and target_os == 'posix':
-    if not clang:
-        env.Append(CCFLAGS=['-fsanitize=address', '-fsanitize=undefined'],
-                   LINKFLAGS=['-fsanitize=address', '-fsanitize=undefined'],
-                   LIBS=['asan', 'ubsan'])
-    else:
-        env.Append(CFLAGS=['-fsanitize=address', '-fsanitize=undefined'],
-                   LINKFLAGS=['-fsanitize=address', '-fsanitize=undefined'])
+if env['mode'] == 'debug' and target_os == 'posix':
+    env.Append(CCFLAGS=['-fsanitize=address', '-fsanitize=undefined'],
+               LINKFLAGS=['-fsanitize=address', '-fsanitize=undefined'],
+               LIBS=['asan', 'ubsan'])
 
 
 # Global compilation flags.
@@ -57,32 +50,35 @@ if debug and target_os == 'posix':
 env.Append(
     CFLAGS=['-std=gnu99', '-Wall',
             '-Wno-unknow-pragma', '-Wno-unknown-warning-option'],
-    CXXFLAGS=['-std=gnu++11', '-Wall', '-Wno-narrowing']
+    CXXFLAGS=['-std=gnu++17', '-Wall', '-Wno-narrowing']
 )
 
-if werror:
+if env['werror']:
     env.Append(CCFLAGS='-Werror')
 
 
-if debug:
-    env.Append(CCFLAGS=['-O1'])
-    if env['CC'] == 'gcc': env.Append(CCFLAGS='-Og')
+if env['mode'] == 'debug':
+    env.Append(CCFLAGS=['-O0'])
 else:
-    env.Append(CCFLAGS=['-O3', '-DNDEBUG'])
-    if env['CC'] == 'gcc': env.Append(CFLAGS='-Ofast', CXXFLAGS='-Ofast')
+    env.Append(CCFLAGS='-O3', CPPDEFINES='NDEBUG')
+    if env['CC'] == 'gcc': env.Append(CCFLAGS='-Ofast')
 
-if profile or debug:
+if env['mode'] in ('profile', 'debug'):
     env.Append(CCFLAGS='-g')
 
 env.Append(CPPPATH=['src'])
+env.Append(CCFLAGS=['-include', '$config_file'])
 
-sources = glob.glob('src/*.c') + glob.glob('src/*.cpp') + \
-          glob.glob('src/formats/*.c') + \
-          glob.glob('src/tools/*.c')
+# Get all the c and c++ files in src, recursively.
+sources = []
+for root, dirnames, filenames in os.walk('src'):
+    for filename in filenames:
+        if filename.endswith('.c') or filename.endswith('.cpp'):
+            sources.append(os.path.join(root, filename))
 
 # Check for libpng.
 if conf.CheckLibWithHeader('libpng', 'png.h', 'c'):
-    env.Append(CCFLAGS='-DHAVE_LIBPNG=1')
+    env.Append(CPPDEFINES='HAVE_LIBPNG=1')
 
 # Linux compilation support.
 if target_os == 'posix':
@@ -94,14 +90,13 @@ if target_os == 'posix':
 # Windows compilation support.
 if target_os == 'msys':
     env.Append(CXXFLAGS=['-Wno-attributes', '-Wno-unused-variable',
-                         '-Wno-unused-function',
-                         '-DFREE_WINDOWS'])
+                         '-Wno-unused-function'])
     env.Append(LIBS=['glfw3', 'opengl32', 'Imm32', 'gdi32', 'Comdlg32',
                      'z', 'tre', 'intl', 'iconv'],
                LINKFLAGS='--static')
     sources += glob.glob('ext_src/glew/glew.c')
     env.Append(CPPPATH=['ext_src/glew'])
-    env.Append(CCFLAGS='-DGLEW_STATIC')
+    env.Append(CPPDEFINES=['GLEW_STATIC', 'FREE_WINDOWS'])
 
 # OSX Compilation support.
 if target_os == 'darwin':
@@ -114,56 +109,9 @@ env.Append(CPPPATH=['ext_src/uthash'])
 env.Append(CPPPATH=['ext_src/stb'])
 env.Append(CPPPATH=['ext_src/noc'])
 
-sources += glob.glob('ext_src/inih/*.c')
-env.Append(CPPPATH=['ext_src/inih'])
-env.Append(CFLAGS='-DINI_HANDLER_LINENO=1')
-
-sources += glob.glob('ext_src/lua/*.c')
-env.Append(CPPPATH=['ext_src/lua'])
-
-if sound:
+if env['sound']:
     env.Append(LIBS='openal')
-    env.Append(CCFLAGS='-DSOUND=1')
-
-# Cycles rendering support.
-if cycles:
-    sources += glob.glob('ext_src/cycles/src/util/*.cpp')
-    sources = [x for x in sources if not x.endswith('util_view.cpp')]
-    sources += glob.glob('ext_src/cycles/src/bvh/*.cpp')
-    sources += glob.glob('ext_src/cycles/src/render/*.cpp')
-    sources += glob.glob('ext_src/cycles/src/graph/*.cpp')
-    sources = [x for x in sources if not x.endswith('node_xml.cpp')]
-
-    sources += glob.glob('ext_src/cycles/src/device/device.cpp')
-    sources += glob.glob('ext_src/cycles/src/device/device_cpu.cpp')
-    sources += glob.glob('ext_src/cycles/src/device/device_memory.cpp')
-    sources += glob.glob('ext_src/cycles/src/device/device_denoising.cpp')
-    sources += glob.glob('ext_src/cycles/src/device/device_split_kernel.cpp')
-    sources += glob.glob('ext_src/cycles/src/device/device_task.cpp')
-
-    sources += glob.glob('ext_src/cycles/src/kernel/kernels/cpu/*.cpp')
-    sources += glob.glob('ext_src/cycles/src/subd/*.cpp')
-
-    env.Append(CPPPATH=['ext_src/cycles/src'])
-    env.Append(CPPPATH=['ext_src/cycles/third_party/atomic'])
-    env.Append(CPPFLAGS=[
-        '-DCYCLES_STD_UNORDERED_MAP',
-        '-DCCL_NAMESPACE_BEGIN=namespace ccl {',
-        '-DCCL_NAMESPACE_END=}',
-        '-DWITH_CUDA_DYNLOAD',
-        '-DWITHOUT_OPENIMAGEIO',
-        '-DWITH_GLEW_MX',
-        '-DWITH_CYCLES',
-    ])
-    # Try to improve compilation speed on linux.
-    if not clang: env.Append(CPPFLAGS='-fno-var-tracking-assignments')
-    # Seems to fix a crash on windows and i386 targets!
-    env.Append(CXXFLAGS='-msse2 -fno-tree-slp-vectorize')
-    if target_os == 'msys': env.Append(CXXFLAGS='-O3')
-    env.Append(CPPFLAGS=['-Wno-sign-compare', '-Wno-strict-aliasing',
-                         '-Wno-uninitialized'])
-    if clang:
-        env.Append(CPPFLAGS=['-Wno-overloaded-virtual'])
+    env.Append(CPPDEFINES='SOUND=1')
 
 # Append external environment flags
 env.Append(

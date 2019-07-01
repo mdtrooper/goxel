@@ -29,9 +29,9 @@ typedef struct {
 
 static void do_move(layer_t *layer, const float mat[4][4])
 {
-    float m[4][4];
+    float m[4][4] = MAT4_IDENTITY;
 
-    mat4_set_identity(m);
+    if (mat4_equal(mat, mat4_identity)) return;
     // Change referential to the mesh origin.
     // XXX: maybe this should be done in mesh_move directy??
     mat4_itranslate(m, -0.5, -0.5, -0.5);
@@ -48,10 +48,10 @@ static void do_move(layer_t *layer, const float mat[4][4])
             box_get_bbox(layer->box, layer->box);
         }
     }
-    goxel_update_meshes(-1);
 }
 
-static int iter(tool_t *tool, const float viewport[4])
+static int iter(tool_t *tool, const painter_t *painter,
+                const float viewport[4])
 {
     float transf[4][4];
     bool first;
@@ -107,6 +107,11 @@ static int gui(tool_t *tool)
     if (gui_button("flip X", -1, 0)) mat4_iscale(mat, -1,  1,  1);
     if (gui_button("flip Y", -1, 0)) mat4_iscale(mat,  1, -1,  1);
     if (gui_button("flip Z", -1, 0)) mat4_iscale(mat,  1,  1, -1);
+    gui_group_end();
+
+    gui_group_begin(NULL);
+    if (gui_button("Scale up",   -1, 0)) mat4_iscale(mat, 2, 2, 2);
+    if (gui_button("Scale down", -1, 0)) mat4_iscale(mat, 0.5, 0.5, 0.5);
     gui_group_end();
 
     if (memcmp(&mat, &mat4_identity, sizeof(mat))) {

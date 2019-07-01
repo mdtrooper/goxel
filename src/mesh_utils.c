@@ -17,7 +17,9 @@
  */
 
 #include "goxel.h"
+
 #include <limits.h>
+#include <zlib.h> // For crc32
 
 #define N BLOCK_SIZE
 
@@ -31,18 +33,15 @@ static int mesh_del(void *data_)
 
 int mesh_select(const mesh_t *mesh,
                 const int start_pos[3],
-                int (*cond)(const uint8_t value[4],
-                            const uint8_t neighboors[6][4],
-                            const uint8_t mask[6],
-                            void *user),
+                int (*cond)(void *user, const mesh_t *mesh,
+                            const int base_pos[3],
+                            const int new_pos[3],
+                            mesh_accessor_t *mesh_accessor),
                 void *user, mesh_t *selection)
 {
-    int i, j, a;
-    uint8_t v2[4];
-    int pos[3], p[3], p2[3];
+    int i, a;
+    int pos[3], p[3];
     bool keep = true;
-    uint8_t neighboors[6][4];
-    uint8_t mask[6];
     mesh_iterator_t iter;
     mesh_accessor_t mesh_accessor, selection_accessor;
     mesh_clear(selection);
@@ -50,6 +49,8 @@ int mesh_select(const mesh_t *mesh,
     mesh_accessor = mesh_get_accessor(mesh);
     selection_accessor = mesh_get_accessor(selection);
 
+    if (!mesh_get_alpha_at(mesh, &mesh_accessor, start_pos))
+        return 0;
     mesh_set_at(selection, &selection_accessor, start_pos,
                 (uint8_t[]){255, 255, 255, 255});
 
@@ -60,24 +61,19 @@ int mesh_select(const mesh_t *mesh,
         keep = false;
         iter = mesh_get_iterator(selection, MESH_ITER_VOXELS);
         while (mesh_iter(&iter, pos)) {
+            // Shouldn't be needed if the iter function did filter the voxels.
+            if (!mesh_get_alpha_at(selection, &selection_accessor, pos))
+                continue;
+
             for (i = 0; i < 6; i++) {
                 p[0] = pos[0] + FACES_NORMALS[i][0];
                 p[1] = pos[1] + FACES_NORMALS[i][1];
                 p[2] = pos[2] + FACES_NORMALS[i][2];
-                mesh_get_at(selection, &selection_accessor, p, v2);
-                if (v2[3]) continue; // Already done.
-                mesh_get_at(mesh, &mesh_accessor, p, v2);
-                // Compute neighboors and mask.
-                for (j = 0; j < 6; j++) {
-                    p2[0] = p[0] + FACES_NORMALS[j][0];
-                    p2[1] = p[1] + FACES_NORMALS[j][1];
-                    p2[2] = p[2] + FACES_NORMALS[j][2];
-                    mesh_get_at(mesh, &mesh_accessor, p2, neighboors[j]);
-                    mask[j] = mesh_get_alpha_at(selection,
-                                                &selection_accessor, p2);
-                }
-                // XXX: the (void*) are only here for gcc <= 4.8.4
-                a = cond((void*)v2, (void*)neighboors, (void*)mask, user);
+                if (mesh_get_alpha_at(selection, &selection_accessor, p))
+                    continue; // Already done.
+                if (!mesh_get_alpha_at(mesh, &mesh_accessor, p))
+                    continue; // No voxel here.
+                a = cond(user, mesh, pos, p, &mesh_accessor);
                 if (a) {
                     mesh_set_at(selection, &selection_accessor, p,
                                 (uint8_t[]){255, 255, 255, a});
@@ -495,24 +491,24 @@ void mesh_crop(mesh_t *mesh, const float box[4][4])
     mesh_op(mesh, &painter, box);
 }
 
-/* Function: mesh_crc64
- * Compute the crc64 of the mesh data as an array of xyz rgba values.
+/* Function: mesh_crc32
+ * Compute the crc32 of the mesh data as an array of xyz rgba values.
  *
  * This is only used in the tests, to make sure that we can still open
  * old file formats.
  */
-uint64_t mesh_crc64(const mesh_t *mesh)
+uint32_t mesh_crc32(const mesh_t *mesh)
 {
     mesh_iterator_t iter;
     int pos[3];
     uint8_t v[4];
-    uint64_t ret = 0;
+    uint32_t ret = 0;
     iter = mesh_get_iterator(mesh, MESH_ITER_VOXELS);
     while (mesh_iter(&iter, pos)) {
         mesh_get_at(mesh, &iter, pos, v);
         if (!v[3]) continue;
-        ret = crc64(ret, (void*)pos, sizeof(pos));
-        ret = crc64(ret, (void*)v, sizeof(v));
+        ret = crc32(ret, (void*)pos, sizeof(pos));
+        ret = crc32(ret, (void*)v, sizeof(v));
     }
     return ret;
 }
@@ -564,7 +560,10 @@ static int l_mesh_save(const action_t *action, lua_State *l)
     mesh = luaG_checkpointer(l, 1, "mesh");
     path = luaL_checkstring(l, 2);
     type = strrchr(path, '.');
-    if (!type) luaL_error(l, "file has no extension: %s", path);
+    if (!type) {
+        luaL_error(l, "file has no extension: %s", path);
+        return 0;
+    }
     type++;
     sprintf(buf, "mesh_export_as_%s", type);
     action = action_get(buf, false);
@@ -572,7 +571,7 @@ static int l_mesh_save(const action_t *action, lua_State *l)
         return action_exec_lua(action, l);
     if (strcmp(type, "gox") == 0) {
         img = image_new();
-        layer = image_add_layer(img);
+        layer = image_add_layer(img, NULL);
         mesh_set(layer->mesh, mesh);
         save_to_file(img, path, true);
         image_delete(img);

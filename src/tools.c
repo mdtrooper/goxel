@@ -24,7 +24,6 @@ static int tool_set_action(const action_t *a, lua_State *l)
     if (goxel.tool_mesh) {
         mesh_delete(goxel.tool_mesh);
         goxel.tool_mesh = NULL;
-        goxel_update_meshes(MESH_LAYERS);
     }
     goxel.tool = (tool_t*)a->data;
     return 0;
@@ -48,7 +47,7 @@ void tool_register_(const tool_t *tool)
 static int pick_color_gesture(gesture3d_t *gest, void *user)
 {
     cursor_t *curs = &goxel.cursor;
-    mesh_t *mesh = goxel.layers_mesh;
+    const mesh_t *mesh = goxel_get_layers_mesh();
     int pi[3] = {floor(curs->pos[0]),
                  floor(curs->pos[1]),
                  floor(curs->pos[2])};
@@ -71,7 +70,7 @@ static gesture3d_t g_pick_color_gesture = {
     .buttons = CURSOR_CTRL,
 };
 
-int tool_iter(tool_t *tool, const float viewport[4])
+int tool_iter(tool_t *tool, const painter_t *painter, const float viewport[4])
 {
     assert(tool);
     if (    (tool->flags & TOOL_REQUIRE_CAN_EDIT) &&
@@ -79,7 +78,7 @@ int tool_iter(tool_t *tool, const float viewport[4])
         goxel_set_help_text("Cannot edit this layer");
         return 0;
     }
-    tool->state = tool->iter_fn(tool, viewport);
+    tool->state = tool->iter_fn(tool, painter, viewport);
 
     if (tool->flags & TOOL_ALLOW_PICK_COLOR)
         gesture3d(&g_pick_color_gesture, &goxel.cursor, NULL);
@@ -185,14 +184,12 @@ int tool_gui_smoothness(void)
 
 int tool_gui_color(void)
 {
-    int alpha = goxel.painter.color[3];
-    gui_text("Color");
-    gui_color("##color", goxel.painter.color);
+    float alpha;
+    gui_color_small("Color", goxel.painter.color);
     if (goxel.painter.mode == MODE_PAINT) {
-        if (gui_input_int("Alpha", &alpha, 0, 255))
-            goxel.painter.color[3] = alpha;
-    } else {
-        goxel.painter.color[3] = 255;
+        alpha = goxel.painter.color[3] / 255.;
+        if (gui_input_float("Alpha", &alpha, 0.1, 0, 1, "%.1f"))
+            goxel.painter.color[3] = alpha * 255;
     }
     return 0;
 }

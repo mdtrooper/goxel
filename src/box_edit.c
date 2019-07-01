@@ -128,6 +128,7 @@ static int on_drag(gesture3d_t *gest, void *user)
 
     if (gest->state == GESTURE_END) {
         mat4_copy(plane_null, goxel.tool_plane);
+        data->state = 0;
     }
     return 0;
 }
@@ -136,7 +137,7 @@ static int on_drag(gesture3d_t *gest, void *user)
 int box_edit(int snap, int mode, float transf[4][4], bool *first)
 {
     cursor_t *curs = &goxel.cursor;
-    float box[4][4];
+    float box[4][4] = {};
     int ret;
 
     if (snap == SNAP_LAYER_OUT) {

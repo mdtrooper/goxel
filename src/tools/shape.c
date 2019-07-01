@@ -23,13 +23,11 @@ typedef struct {
     tool_t tool;
     float  start_pos[3];
     mesh_t *mesh_orig;
-    bool   adjust;
     bool   planar; // Stay on the original plane.
 
     struct {
         gesture3d_t drag;
         gesture3d_t hover;
-        gesture3d_t adjust;
     } gestures;
 
 } tool_shape_t;
@@ -45,6 +43,7 @@ static void get_box(const float p0[3], const float p1[3], const float n[3],
         bbox_from_extents(box, p0, r, r, r);
         box_swap_axis(box, 2, 0, 1, box);
         mat4_copy(box, out);
+        return;
     }
     if (r == 0) {
         bbox_from_points(box, p0, p1);
@@ -94,12 +93,11 @@ static int on_hover(gesture3d_t *gest, void *user)
 
 static int on_drag(gesture3d_t *gest, void *user)
 {
-    tool_shape_t *shape = user;
+    tool_shape_t *shape = USER_GET(user, 0);
+    const painter_t *painter = USER_GET(user, 1);
     mesh_t *layer_mesh = goxel.image->active_layer->mesh;
     float box[4][4], pos[3];
     cursor_t *curs = gest->cursor;
-
-    if (shape->adjust) return GESTURE_FAILED;
 
     if (gest->state == GESTURE_BEGIN) {
         mesh_set(shape->mesh_orig, layer_mesh);
@@ -115,62 +113,25 @@ static int on_drag(gesture3d_t *gest, void *user)
     get_box(shape->start_pos, curs->pos, curs->normal, 0, goxel.plane, box);
     if (!goxel.tool_mesh) goxel.tool_mesh = mesh_new();
     mesh_set(goxel.tool_mesh, shape->mesh_orig);
-    mesh_op(goxel.tool_mesh, &goxel.painter, box);
-    goxel_update_meshes(MESH_RENDER);
+    mesh_op(goxel.tool_mesh, painter, box);
 
     if (gest->state == GESTURE_END) {
         mesh_set(layer_mesh, goxel.tool_mesh);
         mesh_delete(goxel.tool_mesh);
         goxel.tool_mesh = NULL;
-        goxel_update_meshes(-1);
-        shape->adjust = goxel.tool_shape_two_steps;
         mat4_copy(plane_null, goxel.tool_plane);
     }
     return 0;
 }
 
-static int on_adjust(gesture3d_t *gest, void *user)
-{
-    tool_shape_t *shape = user;
-    cursor_t *curs = gest->cursor;
-    float pos[3], v[3], box[4][4];
-    mesh_t *mesh = goxel.image->active_layer->mesh;
 
-    goxel_set_help_text("Adjust height.");
-
-    if (gest->state == GESTURE_BEGIN) {
-        plane_from_normal(goxel.tool_plane, curs->pos, goxel.plane[0]);
-    }
-
-    vec3_sub(curs->pos, goxel.tool_plane[3], v);
-    vec3_project(v, goxel.plane[2], v);
-    vec3_add(goxel.tool_plane[3], v, pos);
-    pos[0] = round(pos[0] - 0.5) + 0.5;
-    pos[1] = round(pos[1] - 0.5) + 0.5;
-    pos[2] = round(pos[2] - 0.5) + 0.5;
-
-    get_box(shape->start_pos, pos, curs->normal, 0, goxel.plane, box);
-
-    mesh_set(mesh, shape->mesh_orig);
-    mesh_op(mesh, &goxel.painter, box);
-    goxel_update_meshes(MESH_RENDER);
-
-    if (gest->state == GESTURE_END) {
-        mat4_copy(plane_null, goxel.tool_plane);
-        mesh_set(shape->mesh_orig, mesh);
-        shape->adjust = false;
-        goxel_update_meshes(-1);
-    }
-
-    return 0;
-}
-
-static int iter(tool_t *tool, const float viewport[4])
+static int iter(tool_t *tool, const painter_t *painter,
+                const float viewport[4])
 {
     tool_shape_t *shape = (tool_shape_t*)tool;
     cursor_t *curs = &goxel.cursor;
     curs->snap_mask |= SNAP_ROUNDED;
-    curs->snap_offset = (goxel.painter.mode == MODE_OVER) ? 0.5 : -0.5;
+    curs->snap_offset = (painter->mode == MODE_OVER) ? 0.5 : -0.5;
 
     if (!shape->mesh_orig)
         shape->mesh_orig = mesh_copy(goxel.image->active_layer->mesh);
@@ -184,17 +145,10 @@ static int iter(tool_t *tool, const float viewport[4])
             .type = GESTURE_HOVER,
             .callback = on_hover,
         };
-        shape->gestures.adjust = (gesture3d_t) {
-            .type = GESTURE_HOVER,
-            .callback = on_adjust,
-        };
     }
 
-    gesture3d(&shape->gestures.drag, curs, shape);
-    if (!shape->adjust)
-        gesture3d(&shape->gestures.hover, curs, shape);
-    else
-        gesture3d(&shape->gestures.adjust, curs, shape);
+    gesture3d(&shape->gestures.drag, curs, USER_PASS(shape, painter));
+    gesture3d(&shape->gestures.hover, curs, USER_PASS(shape, painter));
 
     return tool->state;
 }
@@ -203,10 +157,8 @@ static int iter(tool_t *tool, const float viewport[4])
 static int gui(tool_t *tool)
 {
     tool_shape_t *tool_shape = (void*)tool;
+    tool_gui_color();
     tool_gui_smoothness();
-    if (!DEFINED(GOXEL_MOBILE))
-        gui_checkbox("Two steps", &goxel.tool_shape_two_steps,
-                     "Second click set the height");
     gui_checkbox("Planar", &tool_shape->planar, "Stay on original plane");
     tool_gui_snap();
     tool_gui_shape(NULL);

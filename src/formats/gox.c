@@ -99,6 +99,13 @@ typedef struct {
     int      pos;
 } chunk_t;
 
+// Conveniance macro to call snprintf without gcc warning us about
+// possible truncations.
+#define copy_string(dst, src) ({ \
+    int r = snprintf(dst, sizeof(dst), "%s", src); \
+    if (r >= sizeof(dst)) LOG_W("String truncated"); \
+})
+
 static void write_int32(FILE *out, int32_t v)
 {
     fwrite((char*)&v, 4, 1, out);
@@ -125,22 +132,25 @@ static bool chunk_read_start(chunk_t *c, FILE *in)
     return true;
 }
 
-static void chunk_read(chunk_t *c, FILE *in, char *buff, int size)
+static void chunk_read(chunk_t *c, FILE *in, char *buff, int size, int line)
 {
+    if (size == 0) return;
     c->pos += size;
     assert(c->pos <= c->length);
     if (buff) {
         // XXX: use a better error mechanism!
-        if (fread(buff, size, 1, in) != 1) LOG_E("Error reading file");
+        if (fread(buff, size, 1, in) != 1) {
+            LOG_E("Error reading file (line %d)", line);
+        }
     } else {
         fseek(in, size, SEEK_CUR);
     }
 }
 
-static int32_t chunk_read_int32(chunk_t *c, FILE *in)
+static int32_t chunk_read_int32(chunk_t *c, FILE *in, int line)
 {
     int32_t v;
-    chunk_read(c, in, (char*)&v, 4);
+    chunk_read(c, in, (char*)&v, 4, line);
     return v;
 }
 
@@ -151,17 +161,18 @@ static void chunk_read_finish(chunk_t *c, FILE *in)
 }
 
 static bool chunk_read_dict_value(chunk_t *c, FILE *in,
-                                  char *key, char *value, int *value_size) {
+                                  char *key, char *value, int *value_size,
+                                  int line) {
     int size;
     assert(c->pos <= c->length);
     if (c->pos == c->length) return 0;
-    size = chunk_read_int32(c, in);
+    size = chunk_read_int32(c, in, line);
     if (size == 0) return false;
     assert(size < 256);
-    chunk_read(c, in, key, size);
+    chunk_read(c, in, key, size, line);
     key[size] = '\0';
-    size = chunk_read_int32(c, in);
-    chunk_read(c, in, value, size);
+    size = chunk_read_int32(c, in, line);
+    chunk_read(c, in, value, size, line);
     value[size] = '\0';
     *value_size = size;
     return true;
@@ -216,6 +227,26 @@ static void chunk_write_all(FILE *out, const char *type,
     write_int32(out, 0);        // CRC XXX: todo.
 }
 
+static int get_material_idx(const image_t *img, const material_t *mat)
+{
+    int i;
+    const material_t *m;
+    for (i = 0, m = img->materials; m; m = m->next, i++) {
+        if (m == mat) return i;
+    }
+    return 0;
+}
+
+static const material_t *get_material(const image_t *img, int idx)
+{
+    int i;
+    const material_t *m;
+    for (i = 0, m = img->materials; m; m = m->next, i++) {
+        if (i == idx) return m;
+    }
+    return NULL;
+}
+
 void save_to_file(const image_t *img, const char *path, bool with_preview)
 {
     // XXX: remove all empty blocks before saving.
@@ -223,11 +254,12 @@ void save_to_file(const image_t *img, const char *path, bool with_preview)
     block_hash_t *blocks_table = NULL, *data, *data_tmp;
     layer_t *layer;
     chunk_t c;
-    int nb_blocks, index, size, bpos[3];
+    int nb_blocks, index, size, bpos[3], material_idx;
     uint64_t uid;
     FILE *out;
     uint8_t *png, *preview;
     camera_t *camera;
+    material_t *material;
     mesh_iterator_t iter;
 
     img = img ?: goxel.image;
@@ -278,6 +310,22 @@ void save_to_file(const image_t *img, const char *path, bool with_preview)
         free(png);
     }
 
+    // Write all the materials.
+    DL_FOREACH(img->materials, material) {
+        chunk_write_start(&c, out, "MATE");
+        chunk_write_dict_value(&c, out, "name", material->name,
+                               strlen(material->name));
+        chunk_write_dict_value(&c, out, "color", &material->base_color,
+                               sizeof(material->base_color));
+        chunk_write_dict_value(&c, out, "metallic", &material->metallic,
+                               sizeof(material->metallic));
+        chunk_write_dict_value(&c, out, "roughness", &material->roughness,
+                               sizeof(material->roughness));
+        chunk_write_dict_value(&c, out, "emission", &material->emission,
+                               sizeof(material->emission));
+        chunk_write_finish(&c, out);
+    }
+
     // Write all the layers.
     DL_FOREACH(img->layers, layer) {
         chunk_write_start(&c, out, "LAYR");
@@ -310,6 +358,9 @@ void save_to_file(const image_t *img, const char *path, bool with_preview)
                                sizeof(layer->id));
         chunk_write_dict_value(&c, out, "base_id", &layer->base_id,
                                sizeof(layer->base_id));
+        material_idx = get_material_idx(img, layer->material);
+        chunk_write_dict_value(&c, out, "material", &material_idx,
+                               sizeof(material_idx));
         if (layer->image) {
             chunk_write_dict_value(&c, out, "img-path", layer->image->path,
                                strlen(layer->image->path));
@@ -323,6 +374,8 @@ void save_to_file(const image_t *img, const char *path, bool with_preview)
             chunk_write_dict_value(&c, out, "color", layer->color,
                                 sizeof(layer->color));
         }
+        chunk_write_dict_value(&c, out, "visible", &layer->visible,
+                               sizeof(layer->visible));
 
         chunk_write_finish(&c, out);
     }
@@ -334,12 +387,14 @@ void save_to_file(const image_t *img, const char *path, bool with_preview)
                                strlen(camera->name));
         chunk_write_dict_value(&c, out, "dist", &camera->dist,
                                sizeof(camera->dist));
-        chunk_write_dict_value(&c, out, "rot", &camera->rot,
-                               sizeof(camera->rot));
-        chunk_write_dict_value(&c, out, "ofs", &camera->ofs,
-                               sizeof(camera->ofs));
+        // chunk_write_dict_value(&c, out, "rot", &camera->rot,
+        //                       sizeof(camera->rot));
+        // chunk_write_dict_value(&c, out, "ofs", &camera->ofs,
+        //                       sizeof(camera->ofs));
         chunk_write_dict_value(&c, out, "ortho", &camera->ortho,
                                sizeof(camera->ortho));
+        chunk_write_dict_value(&c, out, "mat", &camera->mat,
+                               sizeof(camera->mat));
         if (camera == img->active_camera)
             chunk_write_dict_value(&c, out, "active", NULL, 0);
 
@@ -377,12 +432,12 @@ int gox_iter_infos(const char *path,
         if (strncmp(c.type, "LAYR", 4) == 0) break;
         if (strncmp(c.type, "PREV", 4) == 0) {
             png = calloc(1, c.length);
-            chunk_read(&c, in, (char*)png, c.length);
+            chunk_read(&c, in, (char*)png, c.length, __LINE__);
             callback(c.type, c.length, png, user);
             free(png);
         } else {
             // Ignore other blocks.
-            chunk_read(&c, in, NULL, c.length);
+            chunk_read(&c, in, NULL, c.length, __LINE__);
         }
         chunk_read_finish(&c, in);
     }
@@ -411,12 +466,13 @@ int load_from_file(const char *path)
     int w, h, bpp;
     uint8_t *png;
     chunk_t c;
-    int i, index, version, x, y, z;
+    int i, index, version, x, y, z, material_idx;
     int  dict_value_size;
     char dict_key[256];
     char dict_value[256];
     uint64_t uid = 1;
-    camera_t *camera;
+    camera_t *camera, *camera_tmp;
+    material_t *mat, *mat_tmp;
 
     in = fopen(path, "rb");
     if (!in) return -1;
@@ -429,19 +485,31 @@ int load_from_file(const char *path)
         goto error;
     }
 
-    // Remove all layers.
-    // XXX: we should load the image fully before deleting the current one.
+    // Remove all layers, materials and camera.
+    // XXX: should have a way to create a totally empty image instead.
     DL_FOREACH_SAFE(goxel.image->layers, layer, layer_tmp) {
         mesh_delete(layer->mesh);
         free(layer);
     }
+    DL_FOREACH_SAFE(goxel.image->materials, mat, mat_tmp) {
+        material_delete(mat);
+    }
+    DL_FOREACH_SAFE(goxel.image->cameras, camera, camera_tmp) {
+        camera_delete(camera);
+    }
+
     goxel.image->layers = NULL;
+    goxel.image->materials = NULL;
+    goxel.image->active_material = NULL;
+    goxel.image->cameras = NULL;
+    goxel.image->active_camera = NULL;
+
     memset(&goxel.image->box, 0, sizeof(goxel.image->box));
 
     while (chunk_read_start(&c, in)) {
         if (strncmp(c.type, "BL16", 4) == 0) {
             png = calloc(1, c.length);
-            chunk_read(&c, in, (char*)png, c.length);
+            chunk_read(&c, in, (char*)png, c.length, __LINE__);
             bpp = 4;
             voxel_data = img_read_from_mem((void*)png, c.length, &w, &h, &bpp);
             assert(w == 64 && h == 64 && bpp == 4);
@@ -454,23 +522,25 @@ int load_from_file(const char *path)
             free(png);
 
         } else if (strncmp(c.type, "LAYR", 4) == 0) {
-            layer = image_add_layer(goxel.image);
-            nb_blocks = chunk_read_int32(&c, in);   assert(nb_blocks >= 0);
+            layer = image_add_layer(goxel.image, NULL);
+            nb_blocks = chunk_read_int32(&c, in, __LINE__);
+            assert(nb_blocks >= 0);
             for (i = 0; i < nb_blocks; i++) {
-                index = chunk_read_int32(&c, in);   assert(index >= 0);
-                x = chunk_read_int32(&c, in);
-                y = chunk_read_int32(&c, in);
-                z = chunk_read_int32(&c, in);
+                index = chunk_read_int32(&c, in, __LINE__);
+                assert(index >= 0);
+                x = chunk_read_int32(&c, in, __LINE__);
+                y = chunk_read_int32(&c, in, __LINE__);
+                z = chunk_read_int32(&c, in, __LINE__);
                 if (version == 1) { // Previous version blocks pos.
                     x -= 8; y -= 8; z -= 8;
                 }
-                chunk_read_int32(&c, in);
+                chunk_read_int32(&c, in, __LINE__);
                 data = hash_find_at(blocks_table, index);
                 assert(data);
                 mesh_blit(layer->mesh, data->v, x, y, z, 16, 16, 16, NULL);
             }
             while ((chunk_read_dict_value(&c, in, dict_key, dict_value,
-                                          &dict_value_size))) {
+                                          &dict_value_size, __LINE__))) {
                 if (strcmp(dict_key, "name") == 0)
                     sprintf(layer->name, "%s", dict_value);
                 if (strcmp(dict_key, "mat") == 0) {
@@ -501,37 +571,59 @@ int load_from_file(const char *path)
                 if (strcmp(dict_key, "color") == 0) {
                     memcpy(layer->color, dict_value, dict_value_size);
                 }
+                if (strcmp(dict_key, "visible") == 0) {
+                    memcpy(&layer->visible, dict_value, dict_value_size);
+                }
+                if (strcmp(dict_key, "material") == 0) {
+                    memcpy(&material_idx, dict_value, dict_value_size);
+                    layer->material = get_material(goxel.image, material_idx);
+                }
             }
         } else if (strncmp(c.type, "CAMR", 4) == 0) {
             camera = camera_new("unnamed");
             DL_APPEND(goxel.image->cameras, camera);
             while ((chunk_read_dict_value(&c, in, dict_key, dict_value,
-                                          &dict_value_size))) {
-                if (strcmp(dict_key, "name") == 0)
-                    strncpy(camera->name, dict_value, sizeof(camera->name));
+                                          &dict_value_size, __LINE__))) {
+                if (strcmp(dict_key, "name") == 0) {
+                    copy_string(camera->name, dict_value);
+                }
                 if (strcmp(dict_key, "dist") == 0)
                     memcpy(&camera->dist, dict_value, dict_value_size);
-                if (strcmp(dict_key, "rot") == 0)
-                    memcpy(&camera->rot, dict_value, dict_value_size);
-                if (strcmp(dict_key, "ofs") == 0)
-                    memcpy(&camera->ofs, dict_value, dict_value_size);
+                // XXX: make old style camera loading work?
+                //    memcpy(&camera->rot, dict_value, dict_value_size);
+                // if (strcmp(dict_key, "ofs") == 0)
+                //    memcpy(&camera->ofs, dict_value, dict_value_size);
                 if (strcmp(dict_key, "ortho") == 0)
                     memcpy(&camera->ortho, dict_value, dict_value_size);
-                if (strcmp(dict_key, "active") == 0) {
+                if (strcmp(dict_key, "mat") == 0)
+                    memcpy(&camera->mat, dict_value, dict_value_size);
+                if (strcmp(dict_key, "active") == 0)
                     goxel.image->active_camera = camera;
-                    camera_set(&goxel.camera, camera);
-                }
             }
-
+        } else if (strncmp(c.type, "MATE", 4) == 0) {
+            mat = image_add_material(goxel.image, NULL);
+            while ((chunk_read_dict_value(&c, in, dict_key, dict_value,
+                                          &dict_value_size, __LINE__))) {
+                if (strcmp(dict_key, "name") == 0)
+                    copy_string(mat->name, dict_value);
+                if (strcmp(dict_key, "color") == 0)
+                    memcpy(mat->base_color, dict_value, dict_value_size);
+                if (strcmp(dict_key, "metallic") == 0)
+                    memcpy(&mat->metallic, dict_value, dict_value_size);
+                if (strcmp(dict_key, "roughness") == 0)
+                    memcpy(&mat->roughness, dict_value, dict_value_size);
+                if (strcmp(dict_key, "emission") == 0)
+                    memcpy(&mat->emission, dict_value, dict_value_size);
+            }
         } else if (strncmp(c.type, "IMG ", 4) == 0) {
             while ((chunk_read_dict_value(&c, in, dict_key, dict_value,
-                                          &dict_value_size))) {
+                                          &dict_value_size, __LINE__))) {
                 if (strcmp(dict_key, "box") == 0)
                     memcpy(&goxel.image->box, dict_value, dict_value_size);
             }
         } else {
             // Ignore other blocks.
-            chunk_read(&c, in, NULL, c.length);
+            chunk_read(&c, in, NULL, c.length, __LINE__);
         }
         chunk_read_finish(&c, in);
     }
@@ -546,15 +638,18 @@ int load_from_file(const char *path)
 
     goxel.image->path = strdup(path);
     goxel.image->saved_key = image_get_key(goxel.image);
-    goxel_update_meshes(-1);
     fclose(in);
 
-    // Update plane, snap mask and camera pos not to confuse people.
+    // Add a default camera if there is none.
+    if (!goxel.image->cameras) {
+        image_add_camera(goxel.image, NULL);
+        camera_fit_box(goxel.image->active_camera, goxel.image->box);
+    }
+
+    // Update plane, snap mask not to confuse people.
     plane_from_vectors(goxel.plane, goxel.image->box[3],
                        VEC(1, 0, 0), VEC(0, 1, 0));
     if (box_is_null(goxel.image->box)) goxel.snap_mask |= SNAP_PLANE;
-    camera_fit_box(&goxel.camera, goxel.image->box);
-
     return 0;
 
 error:

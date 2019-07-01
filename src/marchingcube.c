@@ -253,7 +253,7 @@ int mesh_generate_vertices_mc(const mesh_t *mesh, const int block_pos[3],
                               int *size, int *subdivide)
 {
     int i, vi, x, y, z, v, vx, vy, vz, nb_tri, nb_tri_tot = 0;
-    uint8_t color[4] = {255, 255, 255, 255}, tmp[4];
+    uint8_t tmp[4];
     uint8_t *data;
 
     int densities[8];
@@ -263,7 +263,7 @@ int mesh_generate_vertices_mc(const mesh_t *mesh, const int block_pos[3],
 
     mc_vert_t tri[30][3];
     float n[3];
-    const bool flat = effects & EFFECT_FLAT;
+    const bool flat = !(effects & EFFECT_MC_SMOOTH);
 
     *size = 3;      // Triangles.
     *subdivide = MC_VOXEL_SUB_POS;
@@ -333,7 +333,7 @@ int mesh_generate_vertices_mc(const mesh_t *mesh, const int block_pos[3],
                              y + VERTICES_POSITIONS[tri[i][v].v1][1],
                              z + VERTICES_POSITIONS[tri[i][v].v1][2],
                              c2);
-                memcpy(tri[i][v].color, c1[3] > c2[3] ? c1 : c2, sizeof(color));
+                memcpy(tri[i][v].color, c1[3] > c2[3] ? c1 : c2, 4);
             }
         }
         if (flat) nb_tri = split_triangles(nb_tri, tri, tri);
@@ -351,8 +351,9 @@ int mesh_generate_vertices_mc(const mesh_t *mesh, const int block_pos[3],
                 out[vi].normal[1] = n[1] * 64;
                 out[vi].normal[2] = n[2] * 64;
                 // XXX: this shouldn't matter.
-                memset(out[vi].bshadow_uv, 0, sizeof(out[vi].bshadow_uv));
+                memset(out[vi].occlusion_uv, 0, sizeof(out[vi].occlusion_uv));
                 memset(out[vi].bump_uv, 0, sizeof(out[vi].bump_uv));
+                memset(out[vi].gradient, 0, sizeof(out[vi].gradient));
             }
             nb_tri_tot++;
         }

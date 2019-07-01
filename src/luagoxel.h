@@ -16,18 +16,30 @@
  * goxel.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef LUAGOXEL_H
-#define LUAGOXEL_H
-
-#include <stdint.h>
-
-#include "lauxlib.h"
-#include "lua.h"
-
 /*
  * File: luagoxel.h
  * Some util functions to use lua from goxel.
  */
+
+#ifndef LUAGOXEL_H
+#define LUAGOXEL_H
+
+#ifndef WIN32
+#   define LUA_USE_POSIX
+#endif
+
+#include <stdint.h>
+#include <stdlib.h>
+
+#ifndef HAS_SYSTEM
+#   define HAS_SYSTEM 1
+#endif
+#if !HAS_SYSTEM
+#   define system(x) -1
+#endif
+
+#include "../ext_src/lua/lauxlib.h"
+#include "../ext_src/lua/lua.h"
 
 void *luaG_checkpointer(lua_State *l, int idx, const char *type);
 

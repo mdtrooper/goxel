@@ -2,7 +2,7 @@
 Goxel
 =====
 
-Version 0.8.0
+Version 0.9.0
 
 By Guillaume Chereau <guillaume@noctua-software.com>
 
@@ -71,9 +71,9 @@ Building
 --------
 
 The building system uses scons.  You can compile in debug with 'scons', and in
-release with 'scons debug=0'.  On Windows, I only tried to build with msys2.
-The code is in C99, using some gnu extensions, so it does not compile with
-msvc.
+release with 'scons mode=release'.  On Windows, I only tried to build with
+msys2.  The code is in C99, using some gnu extensions, so it does not compile
+with msvc.
 
 # Linux/BSD
 
@@ -97,3 +97,11 @@ Then to build:
 
     make release
 
+
+Contributing
+------------
+
+In order for your contribution to Goxel to be accepted, you have to sign the
+[Goxel Contributor License Agreement (CLA)](doc/cla/sign-cla.md).  This is
+mostly to allow me to distribute the mobile branch goxel under a non GPL
+licence.

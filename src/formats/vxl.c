@@ -122,7 +122,6 @@ static int vxl_import(const char *path)
 
     mesh_blit(goxel.image->active_layer->mesh, (uint8_t*)cube,
               -w / 2, -h / 2, -d / 2, w, h, d, NULL);
-    goxel_update_meshes(-1);
     if (box_is_null(goxel.image->box)) {
         bbox_from_extents(goxel.image->box, vec3_zero, w / 2, h / 2, d / 2);
     }
@@ -242,7 +241,7 @@ static void export_as_vxl(const char *path)
 {
     uint8_t (*map)[512][512][64];
     uint32_t (*color)[512][512][64];
-    const mesh_t *mesh = goxel.layers_mesh;
+    const mesh_t *mesh = goxel_get_layers_mesh();
     mesh_iterator_t iter = {0};
     uint8_t c[4];
     int x, y, z, pos[3];

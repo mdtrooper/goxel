@@ -22,16 +22,43 @@
 static void export_as_png(const char *path, int w, int h)
 {
     uint8_t *buf;
+    int bpp = goxel.image->export_transparent_background ? 4 : 3;
     w = w ?: goxel.image->export_width;
     h = h ?: goxel.image->export_height;
     path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
                    "png\0*.png\0", NULL, "untitled.png");
     if (!path) return;
     LOG_I("Exporting to file %s", path);
-    buf = calloc(w * h, 4);
-    goxel_render_to_buf(buf, w, h, 4);
-    img_write(buf, w, h, 4, path);
+    buf = calloc(w * h, bpp);
+    goxel_render_to_buf(buf, w, h, bpp);
+    img_write(buf, w, h, bpp, path);
     free(buf);
+}
+
+static void export_gui(void) {
+    int maxsize, i;
+    float view_rect[4];
+
+    GL(glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxsize));
+    maxsize /= 2; // Because png export already double it.
+    goxel.show_export_viewport = true;
+    gui_group_begin(NULL);
+    i = goxel.image->export_width;
+    if (gui_input_int("w", &i, 1, maxsize))
+        goxel.image->export_width = clamp(i, 1, maxsize);
+    i = goxel.image->export_height;
+    if (gui_input_int("h", &i, 1, maxsize))
+        goxel.image->export_height = clamp(i, 1, maxsize);
+    if (gui_button("Fit screen", 1, 0)) {
+        gui_get_view_rect(view_rect);
+        goxel.image->export_width = view_rect[2];
+        goxel.image->export_height = view_rect[3];
+    }
+    gui_group_end();
+
+    gui_checkbox("Transparent background",
+                 &goxel.image->export_transparent_background,
+                 NULL);
 }
 
 ACTION_REGISTER(export_as_png,
@@ -41,5 +68,6 @@ ACTION_REGISTER(export_as_png,
     .file_format = {
         .name = "png",
         .ext = "*.png\0",
+        .export_gui = export_gui,
     },
 )

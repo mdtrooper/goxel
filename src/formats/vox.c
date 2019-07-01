@@ -77,7 +77,6 @@ static void vox_import_old(const char *path)
     free(voxels);
     free(cube);
     fclose(file);
-    goxel_update_meshes(-1);
 }
 
 typedef struct {
@@ -181,7 +180,6 @@ static void vox_import(const char *path)
     free(ctx.voxels);
     free(ctx.palette);
     mesh_remove_empty_blocks(mesh, false);
-    goxel_update_meshes(-1);
 }
 
 static int get_color_index(uint8_t v[4], uint8_t (*palette)[4], bool exact)
@@ -317,7 +315,7 @@ static void export_as_vox(const char *path)
     path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
                     "magica voxel\0*.vox\0", NULL, "untitled.vox");
     if (!path) return;
-    vox_export(goxel.layers_mesh, path);
+    vox_export(goxel_get_layers_mesh(), path);
 }
 
 ACTION_REGISTER(export_as_vox,
