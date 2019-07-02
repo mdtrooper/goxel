@@ -81,9 +81,22 @@ types:
         contents: 'LAYR'
       - id: length
         type: u4
-      - id: unknown
+      - id: layer_data
         size: length
+        type: layer_data
       - id: crc
+        type: u4
+  layer_data:
+    seq:
+      - id: num_blocks
+        type: u4
+      - id: block_index
+        type: u4
+      - id: x
+        type: u4
+      - id: y
+        type: u4
+      - id: z
         type: u4
   camera:
     seq:
