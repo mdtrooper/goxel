@@ -17,10 +17,8 @@ seq:
     type: img
   - id: bl16
     type: bl16
-  - id: bl1z
-    type: bl16
-  - id: bl1zz
-    type: bl16
+    repeat: expr
+    repeat-expr: 3 
   - id: mate
     type: mate
   - id: layer
@@ -33,12 +31,14 @@ types:
     seq:
       - id: magic
         contents: 'GOX '
+        size: 4
       - id: version
         type: u4
   img:
     seq:
       - id: magic
         contents: 'IMG '
+        size: 4
       - id: length
         type: u4
       - id: dict
@@ -50,6 +50,7 @@ types:
     seq:
       - id: magic
         contents: 'BL16'
+        size: 4
       - id: length
         type: u4
       - id: unknown
@@ -69,6 +70,7 @@ types:
     seq:
       - id: magic
         contents: 'MATE'
+        size: 4
       - id: length
         type: u4
       - id: unknown
@@ -79,6 +81,7 @@ types:
     seq:
       - id: magic
         contents: 'LAYR'
+        size: 4
       - id: length
         type: u4
       - id: layer_data
@@ -102,6 +105,7 @@ types:
     seq:
       - id: magic
         contents: 'CAMR'
+        size: 4
       - id: length
         type: u4
       - id: unknown
@@ -111,3 +115,4 @@ types:
 instances:
   value_size:
     value: img.length - 4 - img.dict.length_key
+  
