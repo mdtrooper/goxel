@@ -27,7 +27,7 @@ types:
         type: u4
   chunk:
     seq:
-      - id: type
+      - id: chunk_type
         type: str
         size: 4
       - id: data_length
@@ -35,17 +35,18 @@ types:
       - id: data
         size: data_length
         type:
-        switch-on: type
-        cases:
-          'IMG ': img
-          _: unknown
+          switch-on: chunk_type
+          cases:
+            #'"KETCHUP"': rec_type_1
+              _: type_unknown
       - id: crc
         type: u4
-  img:
-    seq:
-      - id: dict
-        type: dict
-        size: length
-  unknown:
-    seq:
-      - id: unknown
+    types:
+      img:
+        seq:
+         - id: data_img
+           size: 50
+      type_unknown:
+        seq:
+         - id: data_unknown
+           size: 50
