@@ -39,6 +39,9 @@ types:
           cases:
             '"IMG "': img
             '"LAYR"': layer
+            '"BL16"': bl16
+            '"MATE"': mate
+            '"CAMR"': camera
       - id: crc
         type: u4
     types:
@@ -71,6 +74,20 @@ types:
                 type: u4
               - id: zero
                 type: u4
+      bl16:
+        seq:
+          - id: data_bl16
+            size: _parent.data_size
+      mate:
+        seq:
+          - id: mate_dict
+            type: dict
+            repeat: eos
+      camera:
+        seq:
+          - id: camera_dict
+            type: dict
+            repeat: eos
       dict:
         seq:
           - id: key_size
