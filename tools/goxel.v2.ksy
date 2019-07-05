@@ -30,23 +30,30 @@ types:
       - id: chunk_type
         type: str
         size: 4
-      - id: data_length
+      - id: data_size
         type: u4
       - id: data
-        size: data_length
+        size: data_size
         type:
           switch-on: chunk_type
           cases:
-            #'"KETCHUP"': rec_type_1
-              _: type_unknown
+            '"IMG "': img
       - id: crc
         type: u4
     types:
       img:
         seq:
          - id: data_img
-           size: 50
-      type_unknown:
+           type: dict
+           size: _parent.data_size
+      dict:
         seq:
-         - id: data_unknown
-           size: 50
+          - id: key_size
+            type: u4
+          - id: key
+            type: str
+            size: key_size
+          - id: value_size
+            type: u4
+          - id: value
+            size: value_size
