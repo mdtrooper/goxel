@@ -38,6 +38,7 @@ types:
           switch-on: chunk_type
           cases:
             '"IMG "': img
+            '"LAYR"': layer
       - id: crc
         type: u4
     types:
@@ -46,6 +47,30 @@ types:
          - id: data_img
            type: dict
            size: _parent.data_size
+      layer:
+        seq:
+          - id: count_blocks
+            type: u4
+          - id: block
+            type: block
+            repeat: expr
+            repeat-expr: count_blocks
+          - id: block_dict
+            type: dict
+            repeat: eos
+        types:
+          block:
+            seq:
+              - id: block_index
+                type: u4
+              - id: x
+                type: u4
+              - id: y
+                type: u4
+              - id: z
+                type: u4
+              - id: zero
+                type: u4
       dict:
         seq:
           - id: key_size
