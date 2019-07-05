@@ -65,11 +65,11 @@ types:
           block:
             seq:
               - id: block_index
-                type: u4
+                type: s4
               - id: x
-                type: u4
+                type: s4
               - id: y
-                type: u4
+                type: s4
               - id: z
                 type: u4
               - id: zero
