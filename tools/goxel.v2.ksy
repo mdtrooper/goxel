@@ -99,3 +99,7 @@ types:
             type: u4
           - id: value
             size: value_size
+            type:
+              switch-on: key
+              cases:
+                '"name"': str
