@@ -91,8 +91,31 @@ types:
                 size: 4
               - id: chunk_png_data
                 size: chunk_png_size
+                type:
+                  switch-on: chunk_png_type
+                  cases:
+                    '"IHDR"': ihdr
               - id: chunk_png_crc
                 size: 4
+            types:
+              ihdr:
+                seq:
+                  - id: width
+                    type: u4be
+                  - id: height
+                    type: u4be
+                  - id: bit_depth
+                    type: u1
+                  - id: color_type
+                    type: u1
+                    enum: color_types
+                  - id: compression_method
+                    type: u1
+                    enum: compression_methods
+                  - id: filter_method
+                    type: u1
+                  - id: interlace_method
+                    type: u1
       mate:
         seq:
           - id: mate_dict
@@ -118,3 +141,12 @@ types:
               switch-on: key
               cases:
                 '"name"': str
+enums:
+  color_types:
+    0: greyscale
+    2: truecolor
+    3: indexed
+    4: greyscale_alpha
+    6: truecolor_alpha
+  compression_methods:
+    0: zlib
