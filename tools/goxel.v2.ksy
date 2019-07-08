@@ -76,8 +76,23 @@ types:
                 type: u4
       bl16:
         seq:
-          - id: data_bl16
-            size: _parent.data_size
+          - id: magic
+            contents: [137, 80, 78, 71, 13, 10, 26, 10]
+          - id: png
+            type: chunk_png
+            repeat: eos
+        types:
+          chunk_png:
+            seq:
+              - id: chunk_png_size
+                type: u4be
+              - id: chunk_png_type
+                type: str
+                size: 4
+              - id: chunk_png_data
+                size: chunk_png_size
+              - id: chunk_png_crc
+                size: 4
       mate:
         seq:
           - id: mate_dict
