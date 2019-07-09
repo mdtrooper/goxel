@@ -20,7 +20,7 @@ def main(filename):
     global g
     global img
     
-    # ~ print(filename)
+    print(filename)
     
     g = Goxel.from_file(filename)
     
@@ -31,7 +31,7 @@ def main(filename):
     # ~ index_block = 0
     
     for chunk in g.chunk:
-        if chunk.chunk_type == 'BL16':
+        if chunk.type == 'BL16':
             # ~ bl16s.append(chunk._raw_data)
             
             img_png = png.Reader(bytes=chunk._raw_data)
@@ -63,7 +63,7 @@ def main(filename):
                     # ~ print("({x: >2},{y: >2}) ({r: >3},{g: >3},{b: >3},{a: >3})".format(x=x,y=y,r=r,g=g,b=b,a=a))
                     # ~ y += 1
                 # ~ x += 1
-        if chunk.chunk_type == 'LAYR':
+        if chunk.type == 'LAYR':
             data_layer = chunk.data
             layer = {'content': []}
             # ~ for it_block in range(data_layer.count_blocks):

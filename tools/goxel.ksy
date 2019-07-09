@@ -142,9 +142,9 @@ types:
               cases:
                 '"name"': str
                 '"dist"': f4
-                '"ortho"': b1
-                '"active"': b1
-                '"visible"': b1
+                #'"ortho"': b1
+                #'"active"': b1
+                #'"visible"': b1
 enums:
   color_types:
     0: greyscale

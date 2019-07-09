@@ -59,31 +59,31 @@ class Goxel(KaitaiStruct):
             self._read()
 
         def _read(self):
-            self.chunk_type = (self._io.read_bytes(4)).decode(u"ASCII")
-            self.data_size = self._io.read_u4le()
-            _on = self.chunk_type
+            self.type = (self._io.read_bytes(4)).decode(u"ASCII")
+            self.size = self._io.read_u4le()
+            _on = self.type
             if _on == u"BL16":
-                self._raw_data = self._io.read_bytes(self.data_size)
+                self._raw_data = self._io.read_bytes(self.size)
                 _io__raw_data = KaitaiStream(BytesIO(self._raw_data))
                 self.data = self._root.Chunk.Bl16(_io__raw_data, self, self._root)
             elif _on == u"MATE":
-                self._raw_data = self._io.read_bytes(self.data_size)
+                self._raw_data = self._io.read_bytes(self.size)
                 _io__raw_data = KaitaiStream(BytesIO(self._raw_data))
                 self.data = self._root.Chunk.Mate(_io__raw_data, self, self._root)
             elif _on == u"CAMR":
-                self._raw_data = self._io.read_bytes(self.data_size)
+                self._raw_data = self._io.read_bytes(self.size)
                 _io__raw_data = KaitaiStream(BytesIO(self._raw_data))
                 self.data = self._root.Chunk.Camera(_io__raw_data, self, self._root)
             elif _on == u"LAYR":
-                self._raw_data = self._io.read_bytes(self.data_size)
+                self._raw_data = self._io.read_bytes(self.size)
                 _io__raw_data = KaitaiStream(BytesIO(self._raw_data))
                 self.data = self._root.Chunk.Layer(_io__raw_data, self, self._root)
             elif _on == u"IMG ":
-                self._raw_data = self._io.read_bytes(self.data_size)
+                self._raw_data = self._io.read_bytes(self.size)
                 _io__raw_data = KaitaiStream(BytesIO(self._raw_data))
                 self.data = self._root.Chunk.Img(_io__raw_data, self, self._root)
             else:
-                self.data = self._io.read_bytes(self.data_size)
+                self.data = self._io.read_bytes(self.size)
             self.crc = self._io.read_u4le()
 
         class Img(KaitaiStruct):
@@ -94,9 +94,9 @@ class Goxel(KaitaiStruct):
                 self._read()
 
             def _read(self):
-                self._raw_data_img = self._io.read_bytes(self._parent.data_size)
-                _io__raw_data_img = KaitaiStream(BytesIO(self._raw_data_img))
-                self.data_img = self._root.Chunk.Dict(_io__raw_data_img, self, self._root)
+                self._raw_img = self._io.read_bytes(self._parent.size)
+                _io__raw_img = KaitaiStream(BytesIO(self._raw_img))
+                self.img = self._root.Chunk.Dict(_io__raw_img, self, self._root)
 
 
         class Camera(KaitaiStruct):
@@ -107,10 +107,10 @@ class Goxel(KaitaiStruct):
                 self._read()
 
             def _read(self):
-                self.camera_dict = []
+                self.camera = []
                 i = 0
                 while not self._io.is_eof():
-                    self.camera_dict.append(self._root.Chunk.Dict(self._io, self, self._root))
+                    self.camera.append(self._root.Chunk.Dict(self._io, self, self._root))
                     i += 1
 
 
@@ -182,10 +182,10 @@ class Goxel(KaitaiStruct):
                 for i in range(self.count_blocks):
                     self.block[i] = self._root.Chunk.Layer.Block(self._io, self, self._root)
 
-                self.block_dict = []
+                self.dict = []
                 i = 0
                 while not self._io.is_eof():
-                    self.block_dict.append(self._root.Chunk.Dict(self._io, self, self._root))
+                    self.dict.append(self._root.Chunk.Dict(self._io, self, self._root))
                     i += 1
 
 
@@ -197,7 +197,7 @@ class Goxel(KaitaiStruct):
                     self._read()
 
                 def _read(self):
-                    self.block_index = self._io.read_s4le()
+                    self.index = self._io.read_s4le()
                     self.x = self._io.read_s4le()
                     self.y = self._io.read_s4le()
                     self.z = self._io.read_u4le()
@@ -213,10 +213,10 @@ class Goxel(KaitaiStruct):
                 self._read()
 
             def _read(self):
-                self.mate_dict = []
+                self.mate = []
                 i = 0
                 while not self._io.is_eof():
-                    self.mate_dict.append(self._root.Chunk.Dict(self._io, self, self._root))
+                    self.mate.append(self._root.Chunk.Dict(self._io, self, self._root))
                     i += 1
 
 
@@ -235,6 +235,8 @@ class Goxel(KaitaiStruct):
                 _on = self.key
                 if _on == u"name":
                     self.value = (self._io.read_bytes(self.value_size)).decode(u"ASCII")
+                elif _on == u"dist":
+                    self.value = self._io.read_f4le()
                 else:
                     self.value = self._io.read_bytes(self.value_size)
 
