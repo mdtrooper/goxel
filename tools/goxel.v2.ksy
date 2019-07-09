@@ -27,15 +27,15 @@ types:
         type: u4
   chunk:
     seq:
-      - id: chunk_type
+      - id: type
         type: str
         size: 4
-      - id: data_size
+      - id: size
         type: u4
       - id: data
-        size: data_size
+        size: size
         type:
-          switch-on: chunk_type
+          switch-on: type
           cases:
             '"IMG "': img
             '"LAYR"': layer
@@ -47,9 +47,9 @@ types:
     types:
       img:
         seq:
-         - id: data_img
+         - id: img
            type: dict
-           size: _parent.data_size
+           size: _parent.size
       layer:
         seq:
           - id: count_blocks
@@ -58,13 +58,13 @@ types:
             type: block
             repeat: expr
             repeat-expr: count_blocks
-          - id: block_dict
+          - id: dict
             type: dict
             repeat: eos
         types:
           block:
             seq:
-              - id: block_index
+              - id: index
                 type: s4
               - id: x
                 type: s4
@@ -118,12 +118,12 @@ types:
                     type: u1
       mate:
         seq:
-          - id: mate_dict
+          - id: mate
             type: dict
             repeat: eos
       camera:
         seq:
-          - id: camera_dict
+          - id: camera
             type: dict
             repeat: eos
       dict:
@@ -141,6 +141,10 @@ types:
               switch-on: key
               cases:
                 '"name"': str
+                '"dist"': f4
+                '"ortho"': b1
+                '"active"': b1
+                '"visible"': b1
 enums:
   color_types:
     0: greyscale
