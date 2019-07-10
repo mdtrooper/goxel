@@ -16,7 +16,7 @@ img = None
 
 gox_clean = {}
 
-def main(filename):
+def main(filename, store_img):
     global g
     global img
     
@@ -28,11 +28,14 @@ def main(filename):
     bl16s = []
     layers = []
     
-    # ~ index_block = 0
-    
+    index_block = 0
     for chunk in g.chunk:
         if chunk.type == 'BL16':
             # ~ bl16s.append(chunk._raw_data)
+            if store_img:
+                with open('block{}.png'.format(index_block), 'wb') as f:
+                    f.write(chunk._raw_data)
+            
             
             img_png = png.Reader(bytes=chunk._raw_data)
             img = img_png.asRGBA8()
@@ -63,6 +66,9 @@ def main(filename):
                     # ~ print("({x: >2},{y: >2}) ({r: >3},{g: >3},{b: >3},{a: >3})".format(x=x,y=y,r=r,g=g,b=b,a=a))
                     # ~ y += 1
                 # ~ x += 1
+            
+            index_block += 1
+            
         if chunk.type == 'LAYR':
             data_layer = chunk.data
             layer = {'content': []}
@@ -78,4 +84,6 @@ def main(filename):
 
 if __name__ == "__main__":
     filename = sys.argv[1]
-    main(filename)
+    if sys.argv[2] == '--store-img':
+        store_img = True
+    main(filename, store_img)
