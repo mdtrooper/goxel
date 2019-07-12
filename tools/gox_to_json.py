@@ -99,16 +99,30 @@ def main(filename, store_img = False):
             
         if chunk.type == 'LAYR':
             data_layer = chunk.data
-            layer = {'content': []}
+            layer = dict()
+            voxels = dict()
             for block in data_layer.block:
-                print(block.index, block.x, block.y, block.z)
-                for bl16 in bl16s[block.index]:
-                    x = 0
-                    y = 0
-                    for row in bl16:
-                        x += 1
-                # ~ layer['blocks'].append(bl16s[index_block])
-                # ~ index_block += 1
+                x = 0
+                for col in bl16s[block.index]:
+                    y = 0  
+                    for color in col:
+                        if color[3] != 0: # Not transparent
+                            pos = x + (y * 64)
+                            vz = int(pos / 16**2) + block.z # offset block z
+                            res = pos % 16**2 
+                            vy = int(res / 16) + block.y # offset block y
+                            vx = (res % 16) + block.x # offset block x
+                            
+                            if not(vx in voxels):
+                                voxels[vx] = dict()
+                            if not(vy in voxels):
+                                voxels[vx][vy] = dict()
+                            if not(vz in voxels):
+                                voxels[vx][vy][vz] = None
+                            voxels[vx][vy][vz] = color[:3]
+                        y += 1
+                    x += 1
+            layer['voxels'] = voxels
             
             layers.append(layer)
     
@@ -118,6 +132,8 @@ def main(filename, store_img = False):
 
 if __name__ == "__main__":
     filename = sys.argv[1]
-    if sys.argv[2] == '--store-img':
-        store_img = True
+    store_img = False
+    if 2 in sys.argv:
+        if sys.argv[2] == '--store-img':
+            store_img = True
     main(filename, store_img)
