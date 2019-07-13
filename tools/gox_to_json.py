@@ -112,14 +112,14 @@ def main(filename, store_img = False):
                             res = pos % 16**2 
                             vy = int(res / 16) + block.y # offset block y
                             vx = (res % 16) + block.x # offset block x
-                            
+                                
                             if not(vx in voxels):
                                 voxels[vx] = dict()
                             if not(vy in voxels):
                                 voxels[vx][vy] = dict()
                             if not(vz in voxels):
                                 voxels[vx][vy][vz] = None
-                            voxels[vx][vy][vz] = color[:3]
+                            voxels[vx][vy][vz] = '{:02x}{:02x}{:02x}'.format(*color[:3])
                         y += 1
                     x += 1
             layer['voxels'] = voxels
@@ -128,7 +128,7 @@ def main(filename, store_img = False):
     
     gox_clean['layers'] = layers
     
-    print(json.dumps(gox_clean))
+    print(json.dumps(gox_clean, indent=4))
 
 if __name__ == "__main__":
     filename = sys.argv[1]
