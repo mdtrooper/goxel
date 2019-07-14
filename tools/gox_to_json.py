@@ -11,11 +11,10 @@ from goxel import Goxel
 # pip install pypng
 import png
 
-gox_clean = {}
-
 def main(filename, store_img = False):
     goxfile = Goxel.from_file(filename)
     
+    gox_clean = dict()
     gox_clean['header'] = {'version': goxfile.header.version}
     bl16s = []
     layers = []
