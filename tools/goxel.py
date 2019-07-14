@@ -233,12 +233,42 @@ class Goxel(KaitaiStruct):
                 self.key = (self._io.read_bytes(self.key_size)).decode(u"ASCII")
                 self.value_size = self._io.read_u4le()
                 _on = self.key
-                if _on == u"name":
+                if _on == u"dist":
+                    self.value = self._io.read_f4le()
+                elif _on == u"base_id":
+                    self.value = self._io.read_u4le()
+                elif _on == u"material":
+                    self.value = self._io.read_u4le()
+                elif _on == u"metallic":
+                    self.value = self._io.read_f4le()
+                elif _on == u"id":
+                    self.value = self._io.read_u4le()
+                elif _on == u"color":
+                    self._raw_value = self._io.read_bytes(self.value_size)
+                    _io__raw_value = KaitaiStream(BytesIO(self._raw_value))
+                    self.value = self._root.Chunk.Dict.Color(_io__raw_value, self, self._root)
+                elif _on == u"roughness":
+                    self.value = self._io.read_f4le()
+                elif _on == u"name":
                     self.value = (self._io.read_bytes(self.value_size)).decode(u"ASCII")
-                elif _on == u"dist":
+                elif _on == u"emission":
                     self.value = self._io.read_f4le()
                 else:
                     self.value = self._io.read_bytes(self.value_size)
+
+            class Color(KaitaiStruct):
+                def __init__(self, _io, _parent=None, _root=None):
+                    self._io = _io
+                    self._parent = _parent
+                    self._root = _root if _root else self
+                    self._read()
+
+                def _read(self):
+                    self.r = self._io.read_f4le()
+                    self.g = self._io.read_f4le()
+                    self.b = self._io.read_f4le()
+                    self.a = self._io.read_f4le()
+
 
 
 

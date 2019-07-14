@@ -145,6 +145,25 @@ types:
                 #'"ortho"': b1
                 #'"active"': b1
                 #'"visible"': b1
+                '"metallic"': f4
+                '"roughness"': f4
+                '"emission"': f4
+                '"color"': color
+                '"material"': u4
+                '"id"': u4
+                '"base_id"': u4
+                '"material"': u4
+        types:
+          color:
+            seq:
+              - id: r
+                type: f4
+              - id: g
+                type: f4
+              - id: b
+                type: f4
+              - id: a
+                type: f4
 enums:
   color_types:
     0: greyscale
