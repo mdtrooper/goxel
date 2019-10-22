@@ -107,6 +107,7 @@ def main(filename, store_img = False):
                     else:
                         layer[data.key] = data.value
             for block in data_layer.block:
+                print("----------------------------------------------", block.x, block.y, block.z)
                 x = 0
                 for col in bl16s[block.index]:
                     y = 0  
@@ -117,14 +118,14 @@ def main(filename, store_img = False):
                             res = pos % 16**2 
                             vy = int(res / 16) + block.y # offset block y
                             vx = (res % 16) + block.x # offset block x
-                                
                             if not(vx in voxels):
                                 voxels[vx] = dict()
-                            if not(vy in voxels):
+                            if not(vy in voxels[vx]):
                                 voxels[vx][vy] = dict()
-                            if not(vz in voxels):
+                            if not(vz in voxels[vx][vy]):
                                 voxels[vx][vy][vz] = None
                             voxels[vx][vy][vz] = '{:02x}{:02x}{:02x}'.format(*color[:3])
+                            print(vx - block.x, vy - block.y, vz - block.z, vx, vy, vz, voxels[vx][vy][vz])
                         y += 1
                     x += 1
             layer['voxels'] = voxels
@@ -135,7 +136,7 @@ def main(filename, store_img = False):
     gox_clean['cameras'] = cameras
     gox_clean['materials'] = materials
     
-    print(json.dumps(gox_clean, indent=4))
+    # ~ print(json.dumps(gox_clean, indent=4))
 
 if __name__ == "__main__":
     filename = sys.argv[1]

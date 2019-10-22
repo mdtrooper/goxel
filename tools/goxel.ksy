@@ -71,7 +71,7 @@ types:
               - id: y
                 type: s4
               - id: z
-                type: u4
+                type: s4
               - id: zero
                 type: u4
       bl16:
