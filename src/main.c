@@ -255,6 +255,19 @@ int main(int argc, char **argv)
     int width = 640, height = 480, ret = 0;
     inputs_t inputs = {};
     g_inputs = &inputs;
+    
+    // i18n
+    LOG_E("I18N"); 
+    LOG_E("%s", getenv("PWD")); 
+    char* r2 = setlocale (LC_ALL, "");
+    char* r = bindtextdomain ("goxel", "./po/");
+    LOG_E("%s", r2);
+    LOG_E("%s", r);
+    textdomain ("goxel");
+    
+    
+    LOG_E("%s", _("A"));
+    return 1;
 
     // Setup sys callbacks.
     sys_callbacks.set_window_title = set_window_title;

@@ -1,4 +1,5 @@
 SHELL = bash
+
 .ONESHELL:
 
 all:
@@ -12,6 +13,22 @@ profile:
 
 run:
 	./goxel
+
+# --- INIT - i18n entries ----------------------------------------------
+
+# Create or update pot file
+pot:
+	xgettext --keyword=_ --language=C --add-comments --sort-output -o po/goxel.pot $$(find src -name '*.c')
+
+# Update the po files
+merge_po: pot
+	for po_file in $$(find . -name '*.po'); do msgmerge --update $$po_file po/goxel.pot; done
+
+# Generate all mo files
+mo:
+	for po_file in $$(find . -name '*.po'); do msgfmt --output-file=$${po_file/.po/.mo} $$po_file; done
+
+# --- END  - i18n entries ----------------------------------------------
 
 clean:
 	scons -c

@@ -48,7 +48,7 @@ static int export_menu_action_callback(action_t *a, void *user)
 
 void gui_menu(void)
 {
-    if (gui_menu_begin("File")) {
+    if (gui_menu_begin(_("File"))) {
         gui_menu_item("save", "Save",
                 image_get_key(goxel.image) != goxel.image->saved_key);
         gui_menu_item("save_as", "Save as", true);
