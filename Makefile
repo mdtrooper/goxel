@@ -15,6 +15,8 @@ run:
 	./goxel
 
 # --- INIT - i18n entries ----------------------------------------------
+# Generate new po for a language
+# mkdir -p ./po/en_US/; msginit --input=./po/goxel.pot --locale=en_US --output=./po/en_US/goxel.po
 
 # Create or update pot file
 pot:
@@ -22,11 +24,26 @@ pot:
 
 # Update the po files
 merge_po: pot
-	for po_file in $$(find . -name '*.po'); do msgmerge --update $$po_file po/goxel.pot; done
+	for po_file in $$(find . -name '*.po')
+	do
+		msgmerge --update $$po_file po/goxel.pot
+	done
 
 # Generate all mo files
 mo:
-	for po_file in $$(find . -name '*.po'); do msgfmt --output-file=$${po_file/.po/.mo} $$po_file; done
+	for po_file in $$(find . -name '*.po')
+	do
+		filename=$$(basename $$po_file)
+		filename_po=$${filename/.po/.mo}
+		lang_code=$$(echo $$po_file | sed -n -r 's/[.][/]po[/]([^/]+)[/]goxel[.]po/\1/p')
+		dir_locale="./locale/$$lang_code/LC_MESSAGES"
+		ls dir_locale 2>/dev/null
+		if [ $$? -ne 0 ]
+		then
+			mkdir -p $$dir_locale
+		fi
+		msgfmt --output-file=$$dir_locale/$$filename_po $$po_file
+	done
 
 # --- END  - i18n entries ----------------------------------------------
 

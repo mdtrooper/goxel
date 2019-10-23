@@ -257,17 +257,10 @@ int main(int argc, char **argv)
     g_inputs = &inputs;
     
     // i18n
-    LOG_E("I18N"); 
-    LOG_E("%s", getenv("PWD")); 
-    char* r2 = setlocale (LC_ALL, "");
-    char* r = bindtextdomain ("goxel", "./po/");
-    LOG_E("%s", r2);
-    LOG_E("%s", r);
+    setlocale (LC_ALL, "");
+    // First step in local path and after in the system path
+    bindtextdomain ("goxel", "./locale");
     textdomain ("goxel");
-    
-    
-    LOG_E("%s", _("A"));
-    return 1;
 
     // Setup sys callbacks.
     sys_callbacks.set_window_title = set_window_title;
