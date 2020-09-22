@@ -19,6 +19,7 @@
 // Magica voxel vox format support.
 
 #include "goxel.h"
+#include "file_format.h"
 #include <limits.h>
 
 static const uint32_t VOX_DEFAULT_PALETTE[256];
@@ -36,10 +37,12 @@ static inline void hexcolor(uint32_t v, uint8_t out[4])
 #define WRITE(type, v, file) \
     ({ type v_ = v; fwrite(&v_, sizeof(v_), 1, file);})
 
+#define ERROR(msg) do { LOG_E("%s", msg); goto error; } while (0);
+
 // Import the old magica voxel file format:
 //
 // d, h, w, <data>, <palette>
-static void vox_import_old(const char *path)
+static int vox_import_old(const char *path)
 {
     FILE *file;
     int w, h, d, i;
@@ -77,109 +80,356 @@ static void vox_import_old(const char *path)
     free(voxels);
     free(cube);
     fclose(file);
+    return 0;
 }
 
-typedef struct {
-    int         w, h, d;
-    uint8_t     (*palette)[4];
-    int         nb;
-    uint8_t     *voxels;
-} context_t;
+typedef struct node node_t;
+struct node {
+    node_t *children;
+    node_t *next, *prev;
 
-static void read_chunk(FILE *file, context_t *ctx)
+    char id[4];
+    node_t *parent; // Logical parent.
+
+    int node_id;
+    int nb_children;
+    int *children_ids;
+
+    union {
+        struct {
+            int w, h, d;
+        } size;
+        struct {
+            uint8_t (*values)[4];
+        } rgba;
+        struct {
+            int nb;
+            uint8_t *values;
+        } xyzi;
+        struct {
+            int id;
+            int child_id;
+            int nb_frames;
+            int tr[3];
+            bool has_rot;
+            int rot[3][3];
+            bool has_trans;
+            int trans[3];
+        } ntrn;
+        struct {
+            int id;
+            int nb_models;
+            int model_id;
+        } nshp;
+    };
+};
+
+static int read_string(FILE *file, char **out)
 {
-    char id[4], r;
-    int size, children_size, i;
+    int size, r;
+    size = READ(int32_t, file);
+    *out = calloc(size + 1, 1);
+    r = fread(*out, 1, size, file);
+    if (r != size) {
+        return -1;
+    }
+    return size;
+}
+
+static void read_dict(FILE *file, void *user,
+                      void (*callback)(void *user, const char *key, int size,
+                                       const char *value))
+{
+    int nb, i, size;
+    char *key, *value;
+    nb = READ(int32_t, file);
+    for (i = 0; i < nb; i++) {
+        read_string(file, &key);
+        size = read_string(file, &value);
+        if (callback) callback(user, key, size, value);
+        free(key);
+        free(value);
+    }
+}
+
+static void on_trn_dict(void *user, const char *key, int size,
+                        const char *value)
+{
+    node_t *node = user;
+    int v, x, y, z;
+    if (strcmp(key, "_r") == 0) {
+        node->ntrn.has_rot = true;
+        v = atoi(value);
+        x = (v >> 0) & 3;
+        y = (v >> 2) & 3;
+        z = 3 - x - y;
+        node->ntrn.rot[0][x] = ((v >> 4) & 1) ? -1 : +1;
+        node->ntrn.rot[1][y] = ((v >> 5) & 1) ? -1 : +1;
+        node->ntrn.rot[2][z] = ((v >> 6) & 1) ? -1 : +1;
+    }
+    if (strcmp(key, "_t") == 0) {
+        node->ntrn.has_trans = true;
+        sscanf(value, "%d %d %d", &x, &y, &z);
+        node->ntrn.trans[0] = x;
+        node->ntrn.trans[1] = y;
+        node->ntrn.trans[2] = z;
+    }
+}
+
+static bool node_is(const node_t *node, const char *id)
+{
+    return strncmp(node->id, id, 4) == 0;
+}
+
+static void free_node(node_t *node)
+{
+    node_t *child, *tmp;
+
+    if (node_is(node, "RGBA"))
+        free(node->rgba.values);
+    if (node_is(node, "XYZI"))
+        free(node->xyzi.values);
+
+    DL_FOREACH_SAFE(node->children, child, tmp) {
+        DL_DELETE(node->children, child);
+        free_node(child);
+    }
+
+    free(node->children_ids);
+    free(node);
+}
+
+static node_t *read_node(FILE *file)
+{
+    int i, r, size, children_size;
+    node_t *node, *child, *child2;
     long fpos;
 
-    r = fread(id, 1, 4, file);
-    (void)r;
+    node = calloc(1, sizeof(*node));
+    node->node_id = -1;
+    r = fread(node->id, 1, 4, file);
+    if (r != 4) goto error;
+
     size = READ(uint32_t, file);
     children_size = READ(uint32_t, file);
 
-    if (strncmp(id, "SIZE", 4) == 0) {
-        assert(size == 4 * 3);
-        ctx->w = READ(uint32_t, file);
-        ctx->h = READ(uint32_t, file);
-        ctx->d = READ(uint32_t, file);
-    } else if (strncmp(id, "RGBA", 4) == 0) {
-        ctx->palette = malloc(4 * 256);
+    fpos = ftell(file);
+
+    if (strncmp(node->id, "MAIN", 4) == 0) {
+        // Nothing to do.
+    }
+    else if (strncmp(node->id, "SIZE", 4) == 0) {
+        node->size.w = READ(uint32_t, file);
+        node->size.h = READ(uint32_t, file);
+        node->size.d = READ(uint32_t, file);
+    }
+    else if (strncmp(node->id, "RGBA", 4) == 0) {
+        node->rgba.values = malloc(4 * 256);
         for (i = 1; i < 256; i++) {
-            ctx->palette[i][0] = READ(uint8_t, file);
-            ctx->palette[i][1] = READ(uint8_t, file);
-            ctx->palette[i][2] = READ(uint8_t, file);
-            ctx->palette[i][3] = READ(uint8_t, file);
+            node->rgba.values[i][0] = READ(uint8_t, file);
+            node->rgba.values[i][1] = READ(uint8_t, file);
+            node->rgba.values[i][2] = READ(uint8_t, file);
+            node->rgba.values[i][3] = READ(uint8_t, file);
         }
         // Skip the last value!
         for (i = 0; i < 4; i++) READ(uint8_t, file);
-    } else if (strncmp(id, "XYZI", 4) == 0) {
-        ctx->nb = READ(uint32_t, file);
-        ctx->voxels = calloc(ctx->nb, 4);
-        for (i = 0; i < ctx->nb; i++) {
-            ctx->voxels[i * 4 + 0] = READ(uint8_t, file);
-            ctx->voxels[i * 4 + 1] = READ(uint8_t, file);
-            ctx->voxels[i * 4 + 2] = READ(uint8_t, file);
-            ctx->voxels[i * 4 + 3] = READ(uint8_t, file);
+    }
+    else if (strncmp(node->id, "XYZI", 4) == 0) {
+        node->xyzi.nb = READ(uint32_t, file);
+        node->xyzi.values = calloc(node->xyzi.nb, 4);
+        for (i = 0; i < node->xyzi.nb; i++) {
+            node->xyzi.values[i * 4 + 0] = READ(uint8_t, file);
+            node->xyzi.values[i * 4 + 1] = READ(uint8_t, file);
+            node->xyzi.values[i * 4 + 2] = READ(uint8_t, file);
+            node->xyzi.values[i * 4 + 3] = READ(uint8_t, file);
         }
-
-    } else {
-        fseek(file, size, SEEK_CUR);
+    }
+    else if (strncmp(node->id, "nTRN", 4) == 0) {
+        node->node_id = READ(int32_t, file);
+        read_dict(file, NULL, NULL);
+        node->nb_children = 1;
+        node->children_ids = calloc(1, sizeof(int));
+        *node->children_ids = READ(int32_t, file);
+        READ(int32_t, file);
+        READ(int32_t, file);
+        node->ntrn.nb_frames = READ(int32_t, file);
+        for (i = 0; i < node->ntrn.nb_frames; i++) {
+            read_dict(file, node, on_trn_dict);
+        }
+    }
+    else if (strncmp(node->id, "nSHP", 4) == 0) {
+        node->node_id = READ(int32_t, file);
+        read_dict(file, NULL, NULL);
+        node->nshp.nb_models = READ(int32_t, file);
+        for (i = 0; i < node->nshp.nb_models; i++) {
+            node->nshp.model_id = READ(int32_t, file);
+            read_dict(file, NULL, NULL);
+        }
+    }
+    else if (strncmp(node->id, "nGRP", 4) == 0) {
+        node->node_id = READ(int32_t, file);
+        read_dict(file, NULL, NULL);
+        node->nb_children = READ(int32_t, file);
+        node->children_ids = calloc(node->nb_children, sizeof(int));
+        for (i = 0; i < node->nb_children; i++) {
+            node->children_ids[i] = READ(int32_t, file);
+        }
     }
 
-    fpos = ftell(file);
-    while (ftell(file) < fpos + children_size) {
-        read_chunk(file, ctx);
+    if (ftell(file) < fpos + size) {
+        fseek(file, fpos + size, SEEK_SET);
+    }
+
+    while (ftell(file) < fpos + size + children_size) {
+        child = read_node(file);
+        if (!child) continue;
+        DL_APPEND(node->children, child);
+    }
+
+
+    // Set the parents.
+    DL_FOREACH(node->children, child) {
+        for (i = 0; i < child->nb_children; i++) {
+            DL_FOREACH(node->children, child2) {
+                if (child2->node_id == child->children_ids[i]) {
+                    child2->parent = child;
+                }
+            }
+        }
+    }
+
+    return node;
+error:
+    free_node(node);
+    return NULL;
+}
+
+static const node_t *tree_find_shape(const node_t *tree, int model_id)
+{
+    const node_t *child, *ret;
+    DL_FOREACH(tree->children, child) {
+        if (node_is(child, "nSHP") && child->nshp.model_id == model_id)
+            return child;
+        ret = tree_find_shape(child, model_id);
+        if (ret) return ret;
+    }
+    return NULL;
+}
+
+static void node_apply_mat(const node_t *node, float mat[4][4])
+{
+    float rot[4][4] = MAT4_IDENTITY;
+    int i, j;
+
+    if (node->parent) {
+        node_apply_mat(node->parent, mat);
+    }
+
+    if (node_is(node, "nTRN") && node->ntrn.has_trans) {
+        mat4_itranslate(mat, node->ntrn.trans[0],
+                             node->ntrn.trans[1],
+                             node->ntrn.trans[2]);
+    }
+    if (node_is(node, "nTRN") && node->ntrn.has_rot) {
+        for (i = 0; i < 3; i++)
+        for (j = 0; j < 3; j++) {
+            rot[i][j] = node->ntrn.rot[i][j];
+        }
+        mat4_imul(mat, rot);
     }
 }
 
-static void vox_import(const char *path)
+static int import_layer(image_t *image,
+                        const node_t *size, const node_t *xyzi,
+                        const node_t *rgba, const node_t *tree,
+                        int model_id)
+{
+    int i, x, y, z, c, pos[3];
+    layer_t *layer;
+    uint8_t color[4];
+    mesh_iterator_t iter = {0};
+    const node_t *shape;
+    float mat[4][4] = MAT4_IDENTITY;
+
+    // Use the current layer for first shape, then create new layers.
+    if (size == tree->children)
+        layer = image->active_layer;
+    else
+        layer = image_add_layer(image, NULL);
+
+    for (i = 0; i < xyzi->xyzi.nb; i++) {
+        x = xyzi->xyzi.values[i * 4 + 0];
+        y = xyzi->xyzi.values[i * 4 + 1];
+        z = xyzi->xyzi.values[i * 4 + 2];
+        c = xyzi->xyzi.values[i * 4 + 3];
+        pos[0] = x - size->size.w / 2;
+        pos[1] = y - size->size.h / 2;
+        pos[2] = z - size->size.d / 2;
+        if (!c) continue; // Not sure what c == 0 means.
+        if (rgba)
+            memcpy(color, rgba->rgba.values[c], 4);
+        else
+            hexcolor(VOX_DEFAULT_PALETTE[c], color);
+        mesh_set_at(layer->mesh, &iter, pos, color);
+    }
+
+    // Apply the transformation.
+    // XXX: would be better to properly support layer transformations!
+    shape = tree_find_shape(tree, model_id);
+    if (shape) {
+        node_apply_mat(shape, mat);
+        mesh_move(layer->mesh, mat);
+    }
+
+    return 0;
+}
+
+static int vox_import(image_t *image, const char *path)
 {
     FILE *file;
     char magic[4];
-    int version, r, i, x, y, z, c, pos[3];
-    mesh_t      *mesh;
-    mesh_iterator_t iter = {0};
-    uint8_t color[4];
-    context_t ctx = {};
+    int r, i, version;
+    node_t *tree, *size_n, *xyzi_n, *rgba_n;
 
     path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, "vox\0*.vox\0",
                                         NULL, NULL);
-    if (!path) return;
-
-    mesh = goxel.image->active_layer->mesh;
+    if (!path) return -1;
     file = fopen(path, "rb");
     r = fread(magic, 1, 4, file);
-    (void)r;
+    if (r != 4) ERROR("Cannot read file");
+
     if (strncmp(magic, "VOX ", 4) != 0) {
         LOG_D("Old style magica voxel file");
         fclose(file);
-        vox_import_old(path);
-        return;
+        return vox_import_old(path);
     }
-    assert(strncmp(magic, "VOX ", 4) == 0);
-    version = READ(uint32_t, file);
-    (void)version;
-    read_chunk(file, &ctx);
 
-    assert(ctx.voxels);
-    for (i = 0; i < ctx.nb; i++) {
-        x = ctx.voxels[i * 4 + 0];
-        y = ctx.voxels[i * 4 + 1];
-        z = ctx.voxels[i * 4 + 2];
-        c = ctx.voxels[i * 4 + 3];
-        pos[0] = x - ctx.w / 2;
-        pos[1] = y - ctx.h / 2;
-        pos[2] = z;
-        if (!c) continue; // Not sure what c == 0 means.
-        if (ctx.palette)
-            memcpy(color, ctx.palette[c], 4);
-        else
-            hexcolor(VOX_DEFAULT_PALETTE[c], color);
-        mesh_set_at(mesh, &iter, pos, color);
+    if (strncmp(magic, "VOX ", 4) != 0) ERROR("Wrong magic string");
+    version = READ(uint32_t, file);
+    if (version != 150) LOG_W("Magica voxel file version %d!", version);
+    tree = read_node(file);
+    if (!tree) goto error;
+
+    // Get the palette.
+    DL_FOREACH(tree->children, rgba_n) {
+        if (strncmp(rgba_n->id, "RGBA", 4) == 0) break;
     }
-    free(ctx.voxels);
-    free(ctx.palette);
-    mesh_remove_empty_blocks(mesh, false);
+
+    // Create one layer for each ('size', 'xyzi') chunks in the main chunk.
+    i = 0;
+    DL_FOREACH(tree->children, size_n) {
+        if (strncmp(size_n->id, "SIZE", 4) != 0) continue;
+        xyzi_n = size_n->next;
+        if (strncmp(xyzi_n->id, "XYZI", 4) != 0) continue;
+        import_layer(image, size_n, xyzi_n, rgba_n, tree, i);
+        i++;
+    }
+
+    free_node(tree);
+
+    return 0;
+error:
+    return -1;
 }
 
 static int get_color_index(uint8_t v[4], uint8_t (*palette)[4], bool exact)
@@ -211,7 +461,7 @@ static int voxel_cmp(const void *a_, const void *b_)
     return 0;
 }
 
-static void vox_export(const mesh_t *mesh, const char *path)
+static int vox_export(const image_t *image, const char *path)
 {
     FILE *file;
     int children_size, nb_vox = 0, i, pos[3];
@@ -222,7 +472,9 @@ static void vox_export(const mesh_t *mesh, const char *path)
     uint8_t *voxels;
     uint8_t v[4];
     mesh_iterator_t iter;
+    const mesh_t *mesh;
 
+    mesh = goxel_get_layers_mesh(image);
     palette = calloc(256, sizeof(*palette));
     for (i = 0; i < 256; i++)
         hexcolor(VOX_DEFAULT_PALETTE[i], palette[i]);
@@ -308,34 +560,14 @@ static void vox_export(const mesh_t *mesh, const char *path)
 
     fclose(file);
     free(palette);
+    return 0;
 }
 
-static void export_as_vox(const char *path)
-{
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                    "magica voxel\0*.vox\0", NULL, "untitled.vox");
-    if (!path) return;
-    vox_export(goxel_get_layers_mesh(), path);
-}
-
-ACTION_REGISTER(export_as_vox,
-    .help = "Save the image as a vox 3d file",
-    .cfunc = export_as_vox,
-    .csig = "vp",
-    .file_format = {
-        .name = "magica voxel",
-        .ext = "*.vox\0",
-    },
-)
-
-ACTION_REGISTER(import_vox,
-    .help = "Import a magica voxel vox image",
-    .cfunc = vox_import,
-    .csig = "vp",
-    .file_format = {
-        .name = "magica voxel",
-        .ext = "*.vox\0",
-    },
+FILE_FORMAT_REGISTER(vox,
+    .name = "Magica Voxel",
+    .ext = "vox\0*.vox\0",
+    .import_func = vox_import,
+    .export_func = vox_export,
 )
 
 

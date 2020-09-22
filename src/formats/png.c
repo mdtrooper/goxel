@@ -17,22 +17,20 @@
  */
 
 #include "goxel.h"
+#include "file_format.h"
 
 // XXX: this function has to be rewritten.
-static void export_as_png(const char *path, int w, int h)
+static int png_export(const image_t *img, const char *path, int w, int h)
 {
     uint8_t *buf;
-    int bpp = goxel.image->export_transparent_background ? 4 : 3;
-    w = w ?: goxel.image->export_width;
-    h = h ?: goxel.image->export_height;
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                   "png\0*.png\0", NULL, "untitled.png");
-    if (!path) return;
+    int bpp = img->export_transparent_background ? 4 : 3;
+    if (!path) return -1;
     LOG_I("Exporting to file %s", path);
     buf = calloc(w * h, bpp);
     goxel_render_to_buf(buf, w, h, bpp);
     img_write(buf, w, h, bpp, path);
     free(buf);
+    return 0;
 }
 
 static void export_gui(void) {
@@ -63,13 +61,15 @@ static void export_gui(void) {
                  NULL);
 }
 
-ACTION_REGISTER(export_as_png,
-    .help = "Export the image as a png file",
-    .cfunc = export_as_png,
-    .csig = "vpii",
-    .file_format = {
-        .name = "png",
-        .ext = "*.png\0",
-        .export_gui = export_gui,
-    },
+static int export_as_png(const image_t *img, const char *path)
+{
+    png_export(img, path, img->export_width, img->export_height);
+    return 0;
+}
+
+FILE_FORMAT_REGISTER(png,
+    .name = "png",
+    .ext = "png\0*.png\0",
+    .export_gui = export_gui,
+    .export_func = export_as_png,
 )

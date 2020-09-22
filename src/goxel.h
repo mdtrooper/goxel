@@ -40,7 +40,6 @@
 #include "inputs.h"
 #include "layer.h"
 #include "log.h"
-#include "luagoxel.h"
 #include "material.h"
 #include "mesh.h"
 #include "mesh_utils.h"
@@ -77,7 +76,7 @@
 #include <libintl.h>
 #define _(STRING) gettext(STRING)
 
-#define GOXEL_VERSION_STR "0.10.5"
+#define GOXEL_VERSION_STR "0.10.6"
 #ifndef GOXEL_DEFAULT_THEME
 #   define GOXEL_DEFAULT_THEME "original"
 #endif
@@ -593,8 +592,8 @@ void goxel_render_export_view(const float viewport[4]);
 void goxel_mouse_in_view(const float viewport[4], const inputs_t *inputs,
                          bool capture_keys);
 
-const mesh_t *goxel_get_layers_mesh(void);
-const mesh_t *goxel_get_render_mesh(void);
+const mesh_t *goxel_get_layers_mesh(const image_t *img);
+const mesh_t *goxel_get_render_mesh(const image_t *img);
 
 /*
  * Function: goxel_get_render_layers
@@ -615,6 +614,9 @@ void goxel_set_hint_text(const char *msg, ...);
 
 void goxel_import_image_plane(const char *path);
 
+int goxel_import_file(const char *path, const char *format);
+int goxel_export_to_file(const char *path, const char *format);
+
 // Render the view into an RGB[A] buffer.
 void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp);
 
@@ -627,9 +629,6 @@ int gox_iter_infos(const char *path,
                    int (*callback)(const char *attr, int size,
                                    void *value, void *user),
                    void *user);
-
-void wavefront_export(const mesh_t *mesh, const char *path);
-void ply_export(const mesh_t *mesh, const char *path);
 
 // Section: box_edit
 /*
@@ -650,20 +649,15 @@ void ply_export(const mesh_t *mesh, const char *path);
  */
 int box_edit(int snap, int mode, float transf[4][4], bool *first);
 
+
+void settings_load(void);
+void settings_save(void);
+
 // Section: tests
 
 /* Function: tests_run
  * Run all the unit tests */
 void tests_run(void);
-
-// Section: script
-
-/*
- * Function: script_run
- * Run a lua script from a file.
- */
-int script_run(const char *filename, int argc, const char **argv);
-
 
 
 #endif // GOXEL_H

@@ -50,6 +50,9 @@ mo:
 clean:
 	scons -c
 
+analyze:
+	scan-build scons mode=analyze
+
 # Make the doc using natualdocs.  On debian, we only have an old version
 # of naturaldocs available, where it is not possible to exclude files by
 # pattern.  I don't want to parse the C files (only the headers), so for

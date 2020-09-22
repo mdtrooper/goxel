@@ -18,6 +18,7 @@
 
 #include "goxel.h"
 #include "xxhash.h"
+#include "file_format.h"
 
 #include "shader_cache.h"
 
@@ -225,7 +226,7 @@ int goxel_unproject(const float viewport[4],
         if (!(snap_mask & (1 << i))) continue;
         if ((1 << i) == SNAP_MESH) {
             r = goxel_unproject_on_mesh(viewport, pos,
-                                        goxel_get_layers_mesh(), p, n);
+                            goxel_get_layers_mesh(goxel.image), p, n);
         }
         if ((1 << i) == SNAP_PLANE)
             r = goxel_unproject_on_plane(viewport, pos,
@@ -334,7 +335,7 @@ void goxel_reset(void)
 {
     image_delete(goxel.image);
     goxel.image = image_new();
-    action_exec2("settings_load", "");
+    settings_load();
 
     // Put plane horizontal at the origin.
     plane_from_vectors(goxel.plane,
@@ -344,7 +345,7 @@ void goxel_reset(void)
     vec4_set(goxel.grid_color, 255, 255, 255, 127);
     vec4_set(goxel.image_box_color, 204, 204, 255, 255);
 
-    action_exec2("tool_set_brush", "");
+    action_exec2(ACTION_tool_set_brush);
     goxel.tool_radius = 0.5;
     goxel.painter = (painter_t) {
         .shape = &shape_cube,
@@ -455,7 +456,7 @@ int goxel_iter(inputs_t *inputs)
     gui_iter(inputs);
 
     if (DEFINED(SOUND) && time - goxel.last_click_time > 0.1) {
-        mesh_key = mesh_get_key(goxel_get_render_mesh());
+        mesh_key = mesh_get_key(goxel_get_render_mesh(goxel.image));
         if (goxel.last_mesh_key != mesh_key) {
             if (goxel.last_mesh_key) {
                 pitch = goxel.painter.mode == MODE_OVER ? 1.0 :
@@ -644,7 +645,7 @@ void goxel_mouse_in_view(const float viewport[4], const inputs_t *inputs,
         camera->dist *= pow(1.1, -inputs->mouse_wheel);
         // Auto adjust the camera rotation position.
         if (goxel_unproject_on_mesh(viewport, inputs->touches[0].pos,
-                                    goxel_get_layers_mesh(), p, n)) {
+                                goxel_get_layers_mesh(goxel.image), p, n)) {
             camera_set_target(camera, p);
         }
         return;
@@ -670,7 +671,7 @@ void goxel_mouse_in_view(const float viewport[4], const inputs_t *inputs,
     // XXX: this should be an action!
     if (inputs->keys['C']) {
         if (goxel_unproject_on_mesh(viewport, inputs->touches[0].pos,
-                                    goxel_get_layers_mesh(), p, n)) {
+                                goxel_get_layers_mesh(goxel.image), p, n)) {
             camera_set_target(camera, p);
         }
     }
@@ -843,12 +844,7 @@ void goxel_render_view(const float viewport[4], bool render_mode)
             render_img(rend, layer->image, layer->mat, EFFECT_NO_SHADING);
     }
 
-    if ((goxel.tool->id == TOOL_SELECTION) ||
-        (goxel.snap_mask & (SNAP_SELECTION_IN | SNAP_SELECTION_OUT)))
-    {
-        render_box(rend, goxel.selection, NULL,
-                   EFFECT_STRIP | EFFECT_WIREFRAME);
-    }
+    render_box(rend, goxel.selection, NULL, EFFECT_STRIP | EFFECT_WIREFRAME);
 
     // Debug: show the current layer mesh blocks.
     if ((0)) {
@@ -869,10 +865,10 @@ void goxel_render_view(const float viewport[4], bool render_mode)
         float b[4][4];
         uint8_t c[4];
         vec4_set(c, 0, 255, 0, 80);
-        mesh_get_box(goxel_get_layers_mesh(), true, b);
+        mesh_get_box(goxel_get_layers_mesh(goxel.image), true, b);
         render_box(rend, b, c, EFFECT_WIREFRAME);
         vec4_set(c, 0, 255, 255, 80);
-        mesh_get_box(goxel_get_layers_mesh(), false, b);
+        mesh_get_box(goxel_get_layers_mesh(goxel.image), false, b);
         render_box(rend, b, c, EFFECT_WIREFRAME);
     }
     if (goxel.snap_mask & SNAP_PLANE)
@@ -893,13 +889,13 @@ void goxel_render_view(const float viewport[4], bool render_mode)
 
 void image_update(image_t *img);
 
-const mesh_t *goxel_get_layers_mesh(void)
+const mesh_t *goxel_get_layers_mesh(const image_t *img)
 {
     uint32_t key = 0, k;
     layer_t *layer;
 
-    image_update(goxel.image);
-    DL_FOREACH(goxel.image->layers, layer) {
+    image_update((image_t*)img);
+    DL_FOREACH(img->layers, layer) {
         if (!layer->visible) continue;
         if (!layer->mesh) continue;
         k = layer_get_key(layer);
@@ -909,7 +905,7 @@ const mesh_t *goxel_get_layers_mesh(void)
         goxel.layers_mesh_hash = key;
         if (!goxel.layers_mesh_) goxel.layers_mesh_ = mesh_new();
         mesh_clear(goxel.layers_mesh_);
-        DL_FOREACH(goxel.image->layers, layer) {
+        DL_FOREACH(img->layers, layer) {
             if (!layer->visible) continue;
             mesh_merge(goxel.layers_mesh_, layer->mesh, MODE_OVER, NULL);
         }
@@ -917,16 +913,16 @@ const mesh_t *goxel_get_layers_mesh(void)
     return goxel.layers_mesh_;
 }
 
-const mesh_t *goxel_get_render_mesh(void)
+const mesh_t *goxel_get_render_mesh(const image_t *img)
 {
     uint32_t key, k;
     const mesh_t *mesh;
     layer_t *layer;
 
     if (!goxel.tool_mesh)
-        return goxel_get_layers_mesh();
+        return goxel_get_layers_mesh(img);
 
-    key = mesh_get_key(goxel_get_layers_mesh());
+    key = mesh_get_key(goxel_get_layers_mesh(img));
     k = mesh_get_key(goxel.tool_mesh);
     key = XXH32(&k, sizeof(k), key);
     if (key != goxel.render_mesh_hash) {
@@ -1002,7 +998,7 @@ void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
     camera->aspect = (float)w / h;
     camera_update(camera);
 
-    mesh = goxel_get_layers_mesh();
+    mesh = goxel_get_layers_mesh(goxel.image);
     fbo = texture_new_buffer(w * 2, h * 2, TF_DEPTH);
 
     mat4_copy(camera->view_mat, rend.view_mat);
@@ -1019,31 +1015,6 @@ void goxel_render_to_buf(uint8_t *buf, int w, int h, int bpp)
     free(tmp_buf);
     texture_delete(fbo);
 }
-
-
-static void export_as(const char *type, const char *path)
-{
-    char id[128];
-    assert(path);
-    // If not provided, try to guess the type from the path extension.
-    if (!type) {
-        type = strrchr(path, '.');
-        if (!type) {
-            LOG_E("Cannot guess file extension");
-            return;
-        }
-        type++;
-    }
-    sprintf(id, "export_as_%s", type);
-    action_exec2(id, "p", path);
-}
-
-ACTION_REGISTER(export_as,
-    .help = "Export the image",
-    .cfunc = export_as,
-    .csig = "vpp",
-)
-
 
 // XXX: we could merge all the set_xxx_text function into a single one.
 void goxel_set_help_text(const char *msg, ...)
@@ -1086,61 +1057,47 @@ void goxel_on_low_memory(void)
     render_on_low_memory(&goxel.rend);
 }
 
-static int search_action_for_format_cb(action_t *a, void *user)
+int goxel_import_file(const char *path, const char *format)
 {
-    const char *path = USER_GET(user, 0);
-    const char *type = USER_GET(user, 1);
-    const action_t **ret = USER_GET(user, 2);
-    if (!a->file_format.ext) return 0;
-    if (!str_startswith(a->id, type)) return 0;
-    if (!str_endswith(path, a->file_format.ext + 1)) return 0;
-    *ret = a;
-    return 1;
-}
+    const file_format_t *f;
+    int err;
 
-static int goxel_import_file(const char *path)
-{
-    const action_t *a = NULL;
     if (str_endswith(path, ".gox")) {
-        load_from_file(path);
-        return 0;
+        return load_from_file(path);
     }
-    actions_iter(search_action_for_format_cb, USER_PASS(path, "import_", &a));
-    if (!a) return -1;
-    action_exec(a, "p", path);
+    f = file_format_for_path(path, format, "r");
+    if (!f) return -1;
+    err = f->import_func(goxel.image, path);
+    if (err) return err;
     return 0;
 }
 
-ACTION_REGISTER(import,
-    .help = "Import a file",
-    .cfunc = goxel_import_file,
-    .csig = "ip",
-    .flags = ACTION_TOUCH_IMAGE,
-)
-
-static int goxel_export_to_file(const char *path)
+int goxel_export_to_file(const char *path, const char *format)
 {
-    const action_t *a = NULL;
-    actions_iter(search_action_for_format_cb, USER_PASS(path, "export_", &a));
-    if (!a) return -1;
-    return action_exec(a, "p", path);
+    const file_format_t *f;
+    char name[128];
+    int err;
+    f = file_format_for_path(path, format, "w");
+    if (!f) return -1;
+    if (!path) {
+        snprintf(name, sizeof(name), "Untitled%s", f->ext + strlen(f->ext) + 2);
+        path = sys_get_save_path(f->ext, name);
+        if (!path) return -1;
+    }
+    err = f->export_func(goxel.image, path);
+    if (err) return err;
+    sys_on_saved(path);
+    return 0;
 }
 
-ACTION_REGISTER(export,
-    .help = "Export to a file",
-    .cfunc = goxel_export_to_file,
-    .csig = "vp",
-)
-
-static layer_t *cut_as_new_layer(image_t *img, layer_t *layer,
-                                 const float box[4][4])
+static void a_cut_as_new_layer(void)
 {
     layer_t *new_layer;
     painter_t painter;
 
-    img = img ?: goxel.image;
-    layer = layer ?: img->active_layer;
-    if (!box) box = (const void*)goxel.selection;
+    image_t *img = goxel.image;
+    layer_t *layer = img->active_layer;
+    const float (*box)[4][4] = &goxel.selection;
 
     new_layer = image_duplicate_layer(img, layer);
     painter = (painter_t) {
@@ -1148,41 +1105,37 @@ static layer_t *cut_as_new_layer(image_t *img, layer_t *layer,
         .mode = MODE_INTERSECT,
         .color = {255, 255, 255, 255},
     };
-    mesh_op(new_layer->mesh, &painter, box);
+    mesh_op(new_layer->mesh, &painter, *box);
     painter.mode = MODE_SUB;
-    mesh_op(layer->mesh, &painter, box);
-    return new_layer;
+    mesh_op(layer->mesh, &painter, *box);
 }
 
 ACTION_REGISTER(cut_as_new_layer,
     .help = "Cut into a new layer",
-    .cfunc = cut_as_new_layer,
-    .csig = "vppp",
+    .cfunc = a_cut_as_new_layer,
     .flags = ACTION_TOUCH_IMAGE,
 )
 
-static void reset_selection(void)
+static void a_reset_selection(void)
 {
     mat4_copy(mat4_zero, goxel.selection);
 }
 
 ACTION_REGISTER(reset_selection,
     .help = "Reset the selection",
-    .cfunc = reset_selection,
-    .csig = "vp",
+    .cfunc = a_reset_selection,
 )
 
-static void fill_selection(layer_t *layer)
+static void a_fill_selection(void)
 {
+    layer_t *layer = goxel.image->active_layer;
     if (box_is_null(goxel.selection)) return;
-    layer = layer ?: goxel.image->active_layer;
     mesh_op(layer->mesh, &goxel.painter, goxel.selection);
 }
 
 ACTION_REGISTER(fill_selection,
     .help = "Fill the selection with the current paint settings",
-    .cfunc = fill_selection,
-    .csig = "vp",
+    .cfunc = a_fill_selection,
     .flags = ACTION_TOUCH_IMAGE,
 )
 
@@ -1227,7 +1180,6 @@ static void past_action(void)
 ACTION_REGISTER(copy,
     .help = "Copy",
     .cfunc = copy_action,
-    .csig = "v",
     .default_shortcut = "Ctrl C",
     .flags = 0,
 )
@@ -1235,7 +1187,6 @@ ACTION_REGISTER(copy,
 ACTION_REGISTER(past,
     .help = "Past",
     .cfunc = past_action,
-    .csig = "v",
     .default_shortcut = "Ctrl V",
     .flags = ACTION_TOUCH_IMAGE,
 )
@@ -1243,32 +1194,30 @@ ACTION_REGISTER(past,
 #define HS2 (M_SQRT2 / 2.0)
 
 
-static int view_default(const action_t *a, lua_State *l)
+static void a_view_default(void)
 {
     camera_t *camera = get_camera();
     float dist = vec3_norm(camera->mat[3]);
     mat4_set_identity(camera->mat);
     mat4_irotate(camera->mat, M_PI / 4, 1, 0, 0);
     mat4_itranslate(camera->mat, 0, 0, dist);
-    return 0;
 }
 
-static int view_set(const action_t *a, lua_State *l)
+static void a_view_set(void *data)
 {
-    float rz = ((float*)a->data)[0] / 180 * M_PI;
-    float rx = ((float*)a->data)[1] / 180 * M_PI;
+    float rz = ((float*)data)[0] / 180 * M_PI;
+    float rx = ((float*)data)[1] / 180 * M_PI;
     camera_t *camera = get_camera();
 
     mat4_set_identity(camera->mat);
     mat4_itranslate(camera->mat, 0, 0, camera->dist);
     camera_turntable(camera, rz, rx);
-    return 0;
 }
 
 ACTION_REGISTER(view_left,
     .help = "Set camera view to left",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
-    .func = view_set,
+    .cfunc_data = a_view_set,
     .data = (float[]){90, 90},
     .default_shortcut = "Ctrl 3",
 )
@@ -1276,7 +1225,7 @@ ACTION_REGISTER(view_left,
 ACTION_REGISTER(view_right,
     .help = "Set camera view to right",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
-    .func = view_set,
+    .cfunc_data = a_view_set,
     .data = (float[]){-90, 90},
     .default_shortcut = "3",
 )
@@ -1284,7 +1233,7 @@ ACTION_REGISTER(view_right,
 ACTION_REGISTER(view_top,
     .help = "Set camera view to top",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
-    .func = view_set,
+    .cfunc_data = a_view_set,
     .data = (float[]){0, 0},
     .default_shortcut = "7",
 )
@@ -1292,14 +1241,14 @@ ACTION_REGISTER(view_top,
 ACTION_REGISTER(view_default,
     .help = "Set camera view to default",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
-    .func = view_default,
+    .cfunc = a_view_default,
     .default_shortcut = "5",
 )
 
 ACTION_REGISTER(view_front,
     .help = "Set camera view to front",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
-    .func = view_set,
+    .cfunc_data = a_view_set,
     .data = (float[]){0, 90},
     .default_shortcut = "1",
 )
@@ -1312,7 +1261,6 @@ ACTION_REGISTER(quit,
     .help = "Quit the application",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
     .cfunc = quit,
-    .csig = "v",
     .default_shortcut = "Ctrl Q",
 )
 
@@ -1323,7 +1271,6 @@ ACTION_REGISTER(undo,
     .help = "Undo",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
     .cfunc = undo,
-    .csig = "v",
     .default_shortcut = "Ctrl Z",
     .icon = ICON_ARROW_BACK,
 )
@@ -1332,7 +1279,6 @@ ACTION_REGISTER(redo,
     .help = "Redo",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
     .cfunc = redo,
-    .csig = "v",
     .default_shortcut = "Ctrl Y",
     .icon = ICON_ARROW_FORWARD,
 )
@@ -1352,5 +1298,4 @@ ACTION_REGISTER(toggle_mode,
     .help = "Toggle the tool mode (add, sub, paint)",
     .flags = ACTION_CAN_EDIT_SHORTCUT,
     .cfunc = toggle_mode,
-    .csig = "v",
 )

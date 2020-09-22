@@ -20,28 +20,27 @@
 
 static const tool_t *g_tools[TOOL_COUNT] = {};
 
-static int tool_set_action(const action_t *a, lua_State *l)
+static void a_tool_set(void *data)
 {
     if (goxel.tool_mesh) {
         mesh_delete(goxel.tool_mesh);
         goxel.tool_mesh = NULL;
     }
-    goxel.tool = (tool_t*)a->data;
-    return 0;
+    goxel.tool = (tool_t*)data;
 }
 
-void tool_register_(const tool_t *tool)
+void tool_register_(tool_t *tool)
 {
     action_t action;
     action = (action_t) {
         .id = tool->action_id,
         .default_shortcut = tool->default_shortcut,
         .help = "set tool",
-        .func = tool_set_action,
+        .cfunc_data = a_tool_set,
         .data = (void*)tool,
         .flags = ACTION_CAN_EDIT_SHORTCUT,
     };
-    action_register(&action);
+    action_register(&action, tool->action_idx);
     g_tools[tool->id] = tool;
 }
 
@@ -53,7 +52,7 @@ const tool_t *tool_get(int id)
 static int pick_color_gesture(gesture3d_t *gest, void *user)
 {
     cursor_t *curs = &goxel.cursor;
-    const mesh_t *mesh = goxel_get_layers_mesh();
+    const mesh_t *mesh = goxel_get_layers_mesh(goxel.image);
     int pi[3] = {floor(curs->pos[0]),
                  floor(curs->pos[1]),
                  floor(curs->pos[2])};

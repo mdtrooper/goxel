@@ -129,6 +129,8 @@ static layer_t *layer_clone(layer_t *other)
 {
     int len;
     layer_t *layer;
+
+    assert(other);
     layer = calloc(1, sizeof(*layer));
     len = sizeof(layer->name) - 1 - strlen(" clone");
     snprintf(layer->name, sizeof(layer->name), "%.*s clone", len, other->name);
@@ -285,7 +287,7 @@ void image_delete(image_t *img)
 
 layer_t *image_add_layer(image_t *img, layer_t *layer)
 {
-    img = img ?: goxel.image;
+    assert(img);
     if (!layer) {
         layer = layer_new(NULL);
         make_uniq_name(layer->name, sizeof(layer->name), "Layer", img,
@@ -302,7 +304,7 @@ layer_t *image_add_layer(image_t *img, layer_t *layer)
 layer_t *image_add_shape_layer(image_t *img)
 {
     layer_t *layer;
-    img = img ?: goxel.image;
+    assert(img);
     layer = layer_new("shape");
     layer->visible = true;
     layer->shape = &shape_sphere;
@@ -323,8 +325,8 @@ layer_t *image_add_shape_layer(image_t *img)
 void image_delete_layer(image_t *img, layer_t *layer)
 {
     layer_t *other;
-    img = img ?: goxel.image;
-    layer = layer ?: img->active_layer;
+    assert(img);
+    assert(layer);
     DL_DELETE(img->layers, layer);
     if (layer == img->active_layer) img->active_layer = NULL;
 
@@ -345,12 +347,13 @@ void image_delete_layer(image_t *img, layer_t *layer)
     if (!img->active_layer) img->active_layer = img->layers->prev;
 }
 
-void image_move_layer(image_t *img, layer_t *layer, int d)
+static void image_move_layer(image_t *img, layer_t *layer, int d)
 {
-    assert(d == -1 || d == +1);
     layer_t *other = NULL;
-    img = img ?: goxel.image;
-    layer = layer ?: img->active_layer;
+
+    assert(img);
+    assert(layer);
+    assert(d == -1 || d == +1);
     if (d == -1) {
         other = layer->next;
         SWAP(other, layer);
@@ -362,21 +365,11 @@ void image_move_layer(image_t *img, layer_t *layer, int d)
     DL_PREPEND_ELEM(img->layers, other, layer);
 }
 
-static void image_move_layer_up(image_t *img, layer_t *layer)
-{
-    image_move_layer(img, layer, +1);
-}
-
-static void image_move_layer_down(image_t *img, layer_t *layer)
-{
-    image_move_layer(img, layer, -1);
-}
-
 layer_t *image_duplicate_layer(image_t *img, layer_t *other)
 {
     layer_t *layer;
-    img = img ?: goxel.image;
-    other = other ?: img->active_layer;
+    assert(img);
+    assert(other);
     layer = layer_copy(other);
     make_uniq_name(layer->name, sizeof(layer->name), other->name, img,
                    layer_name_exists);
@@ -392,6 +385,7 @@ layer_t *image_clone_layer(image_t *img, layer_t *other)
     layer_t *layer;
     img = img ?: goxel.image;
     other = other ?: img->active_layer;
+    assert(img && other);
     layer = layer_clone(other);
     layer->visible = true;
     layer->id = img_get_new_id(img);
@@ -402,23 +396,16 @@ layer_t *image_clone_layer(image_t *img, layer_t *other)
 
 void image_unclone_layer(image_t *img, layer_t *layer)
 {
-    img = img ?: goxel.image;
-    layer = layer ?: img->active_layer;
+    assert(img);
+    assert(layer);
     layer->base_id = 0;
     layer->shape = NULL;
-}
-
-void image_select_parent_layer(image_t *img, layer_t *layer)
-{
-    img = img ?: goxel.image;
-    layer = layer ?: img->active_layer;
-    img->active_layer = img_get_layer(img, layer->base_id);
 }
 
 void image_merge_visible_layers(image_t *img)
 {
     layer_t *layer, *other, *last = NULL;
-    img = img ?: goxel.image;
+    assert(img);
     DL_FOREACH(img->layers, layer) {
         if (!layer->visible) continue;
         image_unclone_layer(img, layer);
@@ -443,7 +430,7 @@ void image_merge_visible_layers(image_t *img)
 
 camera_t *image_add_camera(image_t *img, camera_t *cam)
 {
-    img = img ?: goxel.image;
+    assert(img);
     if (!cam) {
         cam = camera_new(NULL);
         make_uniq_name(cam->name, sizeof(cam->name), "Camera", img,
@@ -465,7 +452,7 @@ void image_delete_camera(image_t *img, camera_t *cam)
     camera_delete(cam);
 }
 
-void image_move_camera(image_t *img, camera_t *cam, int d)
+static void image_move_camera(image_t *img, camera_t *cam, int d)
 {
     // XXX: make a generic algo to move objects in a list.
     assert(d == -1 || d == +1);
@@ -482,16 +469,6 @@ void image_move_camera(image_t *img, camera_t *cam, int d)
     if (!other || !cam) return;
     DL_DELETE(img->cameras, cam);
     DL_PREPEND_ELEM(img->cameras, other, cam);
-}
-
-static void image_move_camera_up(image_t *img, camera_t *cam)
-{
-    image_move_camera(img, cam, +1);
-}
-
-static void image_move_camera_down(image_t *img, camera_t *cam)
-{
-    image_move_camera(img, cam, -1);
 }
 
 material_t *image_add_material(image_t *img, material_t *mat)
@@ -522,12 +499,11 @@ void image_delete_material(image_t *img, material_t *mat)
         if (layer->material == mat) layer->material = NULL;
 }
 
-static void image_auto_resize(image_t *img)
+static void a_image_auto_resize(void)
 {
     float box[4][4] = {}, layer_box[4][4];
     layer_t *layer;
-
-    img = img ?: goxel.image;
+    image_t *img = goxel.image;
     DL_FOREACH(img->layers, layer) {
         layer_get_bounding_box(layer, layer_box);
         box_union(box, layer_box, box);
@@ -597,6 +573,7 @@ void image_history_resize(image_t *img, int size)
 
         // XXX: do that in a function!
         DL_FOREACH_SAFE(hist->layers, layer, layer_tmp) {
+            assert(layer);
             DL_DELETE(hist->layers, layer);
             layer_delete(layer);
         }
@@ -649,11 +626,11 @@ void image_redo(image_t *img)
     debug_print_history(img);
 }
 
-void image_clear_layer(layer_t *layer, const float box[4][4])
+static void image_clear_layer(void)
 {
     painter_t painter;
-    layer = layer ?: goxel.image->active_layer;
-    if (!box || box_is_null(box)) {
+    layer_t *layer = goxel.image->active_layer;
+    if (box_is_null(goxel.selection)) {
         mesh_clear(layer->mesh);
         return;
     }
@@ -662,7 +639,7 @@ void image_clear_layer(layer_t *layer, const float box[4][4])
         .mode = MODE_SUB,
         .color = {255, 255, 255, 255},
     };
-    mesh_op(layer->mesh, &painter, box);
+    mesh_op(layer->mesh, &painter, goxel.selection);
 }
 
 bool image_layer_can_edit(const image_t *img, const layer_t *layer)
@@ -705,8 +682,8 @@ static void image_image_layer_to_mesh(image_t *img, layer_t *layer)
     int i, j, w, h, bpp = 0, pos[3];
     uint8_t c[4];
     float p[3];
-    img = img ?: goxel.image;
-    layer = layer ?: img->active_layer;
+    assert(img);
+    assert(layer);
     mesh_accessor_t acc;
 
     image_history_push(img);
@@ -732,159 +709,213 @@ static void image_image_layer_to_mesh(image_t *img, layer_t *layer)
 ACTION_REGISTER(layer_clear,
     .help = "Clear the current layer",
     .cfunc = image_clear_layer,
-    .csig = "vpp",
     .icon = ICON_DELETE,
     .flags = ACTION_TOUCH_IMAGE,
     .default_shortcut = "Delete",
 )
 
+static void a_image_add_layer(void)
+{
+    image_add_layer(goxel.image, NULL);
+}
+
 ACTION_REGISTER(img_new_layer,
     .help = "Add a new layer to the image",
-    .cfunc = image_add_layer,
-    .csig = "vpp",
+    .cfunc = a_image_add_layer,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ADD,
 )
 
+static void a_image_delete_layer(void)
+{
+    image_delete_layer(goxel.image, goxel.image->active_layer);
+}
+
 ACTION_REGISTER(img_del_layer,
     .help = "Delete the active layer",
-    .cfunc = image_delete_layer,
-    .csig = "vpp",
+    .cfunc = a_image_delete_layer,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_REMOVE,
 )
 
-ACTION_REGISTER(img_move_layer,
-    .help = "Move the active layer",
-    .cfunc = image_move_layer,
-    .csig = "vppi",
-    .flags = ACTION_TOUCH_IMAGE,
-)
+static void a_image_move_layer_up(void)
+{
+    image_move_layer(goxel.image, goxel.image->active_layer, -1);
+}
+
+static void a_image_move_layer_down(void)
+{
+    image_move_layer(goxel.image, goxel.image->active_layer, +1);
+}
+
 
 ACTION_REGISTER(img_move_layer_up,
     .help = "Move the active layer up",
-    .cfunc = image_move_layer_up,
-    .csig = "vpp",
+    .cfunc = a_image_move_layer_up,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ARROW_UPWARD,
 )
 
 ACTION_REGISTER(img_move_layer_down,
     .help = "Move the active layer down",
-    .cfunc = image_move_layer_down,
-    .csig = "vpp",
+    .cfunc = a_image_move_layer_down,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ARROW_DOWNWARD,
 )
 
+static void a_image_duplicate_layer(void)
+{
+    image_duplicate_layer(goxel.image, goxel.image->active_layer);
+}
+
 ACTION_REGISTER(img_duplicate_layer,
     .help = "Duplicate the active layer",
-    .cfunc = image_duplicate_layer,
-    .csig = "vpp",
+    .cfunc = a_image_duplicate_layer,
     .flags = ACTION_TOUCH_IMAGE,
 )
+
+static void a_image_clone_layer(void)
+{
+    image_clone_layer(goxel.image, goxel.image->active_layer);
+}
 
 ACTION_REGISTER(img_clone_layer,
     .help = "Clone the active layer",
-    .cfunc = image_clone_layer,
-    .csig = "vpp",
+    .cfunc = a_image_clone_layer,
     .flags = ACTION_TOUCH_IMAGE,
 )
+
+static void a_image_unclone_layer(void)
+{
+    image_unclone_layer(goxel.image, goxel.image->active_layer);
+}
 
 ACTION_REGISTER(img_unclone_layer,
     .help = "Unclone the active layer",
-    .cfunc = image_unclone_layer,
-    .csig = "vpp",
+    .cfunc = a_image_unclone_layer,
     .flags = ACTION_TOUCH_IMAGE,
 )
+
+static void a_img_select_parent_layer(void)
+{
+    image_t *image = goxel.image;
+    image->active_layer = img_get_layer(image, image->active_layer->base_id);
+}
+
 
 ACTION_REGISTER(img_select_parent_layer,
     .help = "Select the parent of a layer",
-    .cfunc = image_select_parent_layer,
-    .csig = "vpp",
+    .cfunc = a_img_select_parent_layer,
     .flags = ACTION_TOUCH_IMAGE,
 )
+
+static void a_img_merge_visible_layers(void)
+{
+    image_merge_visible_layers(goxel.image);
+}
 
 ACTION_REGISTER(img_merge_visible_layers,
     .help = "Merge all the visible layers",
-    .cfunc = image_merge_visible_layers,
-    .csig = "vp",
+    .cfunc = a_img_merge_visible_layers,
     .flags = ACTION_TOUCH_IMAGE,
 )
 
+static void a_img_new_camera(void)
+{
+    image_add_camera(goxel.image, NULL);
+}
 
 ACTION_REGISTER(img_new_camera,
     .help = "Add a new camera to the image",
-    .cfunc = image_add_camera,
-    .csig = "vpp",
+    .cfunc = a_img_new_camera,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ADD,
 )
 
+static void a_img_del_camera(void)
+{
+    image_delete_camera(goxel.image, goxel.image->active_camera);
+}
+
 ACTION_REGISTER(img_del_camera,
     .help = "Delete the active camera",
-    .cfunc = image_delete_camera,
-    .csig = "vpp",
+    .cfunc = a_img_del_camera,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_REMOVE,
 )
 
-ACTION_REGISTER(img_move_camera,
-    .help = "Move the active camera",
-    .cfunc = image_move_camera,
-    .csig = "vppi",
-    .flags = ACTION_TOUCH_IMAGE,
-)
+static void a_img_move_camera_up(void)
+{
+    image_move_camera(goxel.image, goxel.image->active_camera, +1);
+}
+
+static void a_img_move_camera_down(void)
+{
+    image_move_camera(goxel.image, goxel.image->active_camera, -1);
+}
 
 ACTION_REGISTER(img_move_camera_up,
     .help = "Move the active camera up",
-    .cfunc = image_move_camera_up,
-    .csig = "vpp",
+    .cfunc = a_img_move_camera_up,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ARROW_UPWARD,
 )
 
 ACTION_REGISTER(img_move_camera_down,
     .help = "Move the active camera down",
-    .cfunc = image_move_camera_down,
-    .csig = "vpp",
+    .cfunc = a_img_move_camera_down,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ARROW_DOWNWARD,
 )
 
+static void a_img_image_layer_to_mesh(void)
+{
+    image_image_layer_to_mesh(goxel.image, goxel.image->active_layer);
+}
+
 ACTION_REGISTER(img_image_layer_to_mesh,
     .help = "Turn an image layer into a mesh",
-    .cfunc = image_image_layer_to_mesh,
-    .csig = "vpp",
+    .cfunc = a_img_image_layer_to_mesh,
     .flags = ACTION_TOUCH_IMAGE,
 )
+
+static void a_img_new_shape_layer(void)
+{
+    image_add_shape_layer(goxel.image);
+}
 
 ACTION_REGISTER(img_new_shape_layer,
     .help = "Add a new shape layer to the image",
-    .cfunc = image_add_shape_layer,
-    .csig = "vp",
+    .cfunc = a_img_new_shape_layer,
     .flags = ACTION_TOUCH_IMAGE,
 )
 
+static void a_img_new_material(void)
+{
+    image_add_material(goxel.image, NULL);
+}
+
 ACTION_REGISTER(img_new_material,
     .help = "Add a new material to the image",
-    .cfunc = image_add_material,
-    .csig = "vpp",
+    .cfunc = a_img_new_material,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_ADD,
 )
 
+static void a_img_del_material(void)
+{
+    image_delete_material(goxel.image, goxel.image->active_material);
+}
+
 ACTION_REGISTER(img_del_material,
     .help = "Delete a material",
-    .cfunc = image_delete_material,
-    .csig = "vpp",
+    .cfunc = a_img_del_material,
     .flags = ACTION_TOUCH_IMAGE,
     .icon = ICON_REMOVE,
 )
 
 ACTION_REGISTER(img_auto_resize,
     .help = "Auto resize the image to fit the layers",
-    .cfunc = image_auto_resize,
-    .csig = "vp",
+    .cfunc = a_image_auto_resize,
     .flags = ACTION_TOUCH_IMAGE,
 )

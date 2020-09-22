@@ -19,6 +19,7 @@
 // Support for Ace of Spades map files (vxl)
 
 #include "goxel.h"
+#include "file_format.h"
 
 #define READ(type, file) \
     ({ type v; size_t r = fread(&v, sizeof(v), 1, file); (void)r; v;})
@@ -45,7 +46,7 @@ static void swap_color(uint32_t v, uint8_t ret[4])
     ret[3] = o[3];
 }
 
-static int vxl_import(const char *path)
+static int vxl_import(image_t *image, const char *path)
 {
     // The algo is based on
     // https://silverspaceship.com/aosmap/aos_file_format.html
@@ -66,8 +67,6 @@ static int vxl_import(const char *path)
     int len_top;
     int len_bottom;
 
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                        "vxl\0*.vxl\0", NULL, NULL);
     if (!path) return -1;
 
     cube = calloc(w * h * d, sizeof(*cube));
@@ -120,10 +119,10 @@ static int vxl_import(const char *path)
         }
     }
 
-    mesh_blit(goxel.image->active_layer->mesh, (uint8_t*)cube,
+    mesh_blit(image->active_layer->mesh, (uint8_t*)cube,
               -w / 2, -h / 2, -d / 2, w, h, d, NULL);
-    if (box_is_null(goxel.image->box)) {
-        bbox_from_extents(goxel.image->box, vec3_zero, w / 2, h / 2, d / 2);
+    if (box_is_null(image->box)) {
+        bbox_from_extents(image->box, vec3_zero, w / 2, h / 2, d / 2);
     }
     free(cube);
     free(data);
@@ -237,18 +236,15 @@ void write_map(const char *filename,
     fclose(f);
 }
 
-static void export_as_vxl(const char *path)
+static int export_as_vxl(const image_t *image, const char *path)
 {
     uint8_t (*map)[512][512][64];
     uint32_t (*color)[512][512][64];
-    const mesh_t *mesh = goxel_get_layers_mesh();
+    const mesh_t *mesh = goxel_get_layers_mesh(image);
     mesh_iterator_t iter = {0};
     uint8_t c[4];
     int x, y, z, pos[3];
-
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                    "vxl\0*.vxl\0", NULL, "untitled.vxl");
-    if (!path) return;
+    assert(path);
 
     map = calloc(1, sizeof(*map));
     color = calloc(1, sizeof(*color));
@@ -266,24 +262,12 @@ static void export_as_vxl(const char *path)
     write_map(path, *map, *color);
     free(map);
     free(color);
+    return 0;
 }
 
-ACTION_REGISTER(import_vxl,
-    .help = "Import a Ace of Spades map file",
-    .cfunc = vxl_import,
-    .csig = "vp",
-    .file_format = {
-        .name = "vxl",
-        .ext = "*.vxl\0"
-    },
-)
-
-ACTION_REGISTER(export_as_vxl,
-    .help = "Export the image as a Spades map file",
-    .cfunc = export_as_vxl,
-    .csig = "vp",
-    .file_format = {
-        .name = "vxl",
-        .ext = "*.vxl\0",
-    },
+FILE_FORMAT_REGISTER(vxl,
+    .name = "vxl",
+    .ext = "vxk\0*.vxl\0",
+    .import_func = vxl_import,
+    .export_func = export_as_vxl,
 )

@@ -66,7 +66,7 @@ void gui_render_panel(void)
             gui_button("Save to album", -1, 0) &&
             gui_need_full_version())
     {
-        action_exec2("export_render_buf_to_photos", "");
+        action_exec2(ACTION_export_render_buf_to_photos);
     }
 
     if (gui_collapsing_header("World", false)) {
@@ -102,7 +102,8 @@ void gui_render_panel(void)
             gui_color_small("Color", pt->floor.color);
 
             gui_text("Material");
-            if (gui_combo_begin("##material", pt->floor.material)) {
+            if (gui_combo_begin("##material",
+                    pt->floor.material ? pt->floor.material->name : NULL)) {
                 DL_FOREACH(goxel.image->materials, material) {
                     if (gui_combo_item(material->name,
                             material == pt->floor.material)) {
@@ -144,5 +145,4 @@ static void export_render_buf_to_photos(void)
 
 ACTION_REGISTER(export_render_buf_to_photos,
     .cfunc = export_render_buf_to_photos,
-    .csig = "v",
 )

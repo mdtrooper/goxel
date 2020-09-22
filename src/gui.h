@@ -78,9 +78,7 @@ bool gui_input_float(const char *label, float *v, float step,
 bool gui_angle(const char *id, float *v, int vmin, int vmax);
 bool gui_bbox(float box[4][4]);
 bool gui_quat(const char *label, float q[4]);
-bool gui_action_button(const char *id, const char *label, float size,
-                       const char *sig, ...);
-bool gui_action_checkbox(const char *id, const char *label);
+bool gui_action_button(int id, const char *label, float size);
 bool gui_selectable(const char *name, bool *v, const char *tooltip, float w);
 bool gui_selectable_toggle(const char *name, int *v, int set_v,
                            const char *tooltip, float w);
@@ -94,7 +92,7 @@ bool gui_input_text_multiline(const char *label, char *buf, int size,
 void gui_input_text_multiline_highlight(int line);
 
 bool gui_combo(const char *label, int *v, const char **names, int nb);
-bool gui_combo_begin(const char *label, const void *current);
+bool gui_combo_begin(const char *label, const char *preview);
 bool gui_combo_item(const char *label, bool selected);
 void gui_combo_end(void);
 
@@ -154,7 +152,7 @@ void gui_popup_body_end(void);
 
 bool gui_menu_begin(const char *label);
 void gui_menu_end(void);
-bool gui_menu_item(const char *action, const char *label, bool enabled);
+bool gui_menu_item(int action, const char *label, bool enabled);
 
 void gui_tooltip(const char *str);
 

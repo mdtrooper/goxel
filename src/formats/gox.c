@@ -678,7 +678,7 @@ int load_from_file(const char *path)
 
     // Set default image box if we didn't have one.
     if (box_is_null(goxel.image->box)) {
-        mesh_get_bbox(goxel_get_layers_mesh(), aabb, true);
+        mesh_get_bbox(goxel_get_layers_mesh(goxel.image), aabb, true);
         if (aabb[0][0] > aabb[1][0]) {
             aabb[0][0] = -16;
             aabb[0][1] = -16;
@@ -701,12 +701,11 @@ error:
     return -1;
 }
 
-static void action_open(const char *path)
+static void a_open(void)
 {
-
-    if (!path)
-        path = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, "gox\0*.gox\0",
-                                    NULL, NULL);
+    const char *path;
+    path = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, "gox\0*.gox\0",
+                                NULL, NULL);
     if (!path) return;
     image_delete(goxel.image);
     goxel.image = image_new();
@@ -715,40 +714,45 @@ static void action_open(const char *path)
 
 ACTION_REGISTER(open,
     .help = "Open an image",
-    .cfunc = action_open,
-    .csig = "vp",
+    .cfunc = a_open,
     .default_shortcut = "Ctrl O",
 )
 
-static void save_as(const char *path)
+static void a_save_as(void)
 {
-    if (!path) {
-        path = noc_file_dialog_open(NOC_FILE_DIALOG_SAVE, "gox\0*.gox\0",
-                                    NULL, "untitled.gox");
-        if (!path) return;
-    }
+    const char *path;
+    path = sys_get_save_path("gox\0*.gox\0", "untitled.gox");
+    if (!path) return;
     if (path != goxel.image->path) {
         free(goxel.image->path);
         goxel.image->path = strdup(path);
         goxel.image->saved_key = image_get_key(goxel.image);
     }
     save_to_file(goxel.image, goxel.image->path);
+    sys_on_saved(path);
 }
 
 ACTION_REGISTER(save_as,
     .help = "Save the image as",
-    .cfunc = save_as,
-    .csig = "vp",
+    .cfunc = a_save_as,
 )
 
-static void save(const char *path)
+static void a_save(void)
 {
-    save_as(path ?: goxel.image->path);
+    const char *path = goxel.image->path;
+    if (!path) path = sys_get_save_path("gox\0*.gox\0", "untitled.gox");
+    if (!path) return;
+    if (path != goxel.image->path) {
+        free(goxel.image->path);
+        goxel.image->path = strdup(path);
+        goxel.image->saved_key = image_get_key(goxel.image);
+    }
+    save_to_file(goxel.image, goxel.image->path);
+    sys_on_saved(path);
 }
 
 ACTION_REGISTER(save,
     .help = "Save the image",
-    .cfunc = save,
-    .csig = "vp",
+    .cfunc = a_save,
     .default_shortcut = "Ctrl S"
 )

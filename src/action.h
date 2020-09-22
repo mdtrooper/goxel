@@ -22,7 +22,8 @@
 #include <stdarg.h>
 #include <stdbool.h>
 
-#include "luagoxel.h"
+#include "actions.h"
+#include "image.h"
 
 // #### Action #################
 
@@ -37,56 +38,50 @@
 
 // XXX: this is still pretty experimental.  This might change in the future.
 
-
 enum {
     ACTION_TOUCH_IMAGE          = 1 << 0,  // Push the undo history.
-    // Toggle actions accept and return a boolean value.
-    ACTION_TOGGLE               = 1 << 1,
     ACTION_CAN_EDIT_SHORTCUT    = 1 << 2,
 };
 
 // Represent an action.
 typedef struct action action_t;
 struct action {
+    int             idx;
     const char      *id;            // Globally unique id.
     const char      *help;          // Help text.
     int             flags;
     const char      *default_shortcut;
     char            shortcut[8];    // Can be changed at runtime.
     int             icon;           // Optional icon id.
-    int             (*func)(const action_t *a, lua_State *l);
     void            *data;
 
     // cfunc and csig can be used to directly call any function.
-    void            *cfunc;
-    const char      *csig;
-
-    // Used for export / import actions.
-    struct {
-        const char  *name;
-        const char  *ext;
-        void        (*export_gui)(void);
-    } file_format;
+    union {
+        void            (*cfunc)(void);
+        void            (*cfunc_data)(void *data);
+    };
 };
 
-void action_register(const action_t *action);
-action_t *action_get(const char *id, bool assert_exists);
-int action_exec_lua(const action_t *action, lua_State *l);
-int action_exec(const action_t *action, const char *sig, ...);
-int action_execv(const action_t *action, const char *sig, va_list ap);
+void action_register(const action_t *action, int idx);
+
+action_t *action_get(int idx, bool assert_exists);
+action_t *action_get_by_name(const char *name);
+
+int action_exec(const action_t *action);
+
 void actions_iter(int (*f)(action_t *action, void *user), void *user);
 
-// Convenience macro to call action_exec directly from an action id.
-#define action_exec2(id, sig, ...) \
-    action_exec(action_get(id, true), sig, ##__VA_ARGS__)
-
+inline void action_exec2(int id)
+{
+    action_exec(action_get(id, true));
+}
 
 // Convenience macro to register an action from anywere in a c file.
 #define ACTION_REGISTER(id_, ...) \
     static const action_t GOX_action_##id_ = {.id = #id_, __VA_ARGS__}; \
     static void GOX_register_action_##id_(void) __attribute__((constructor)); \
     static void GOX_register_action_##id_(void) { \
-        action_register(&GOX_action_##id_); \
+        action_register(&GOX_action_##id_, ACTION_##id_); \
     }
 
 #endif // ACTION_H

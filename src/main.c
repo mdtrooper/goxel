@@ -28,6 +28,12 @@ static inputs_t     *g_inputs = NULL;
 static GLFWwindow   *g_window = NULL;
 static float        g_scale = 1;
 
+static void on_glfw_error(int code, const char *msg)
+{
+    fprintf(stderr, "glfw error %d (%s)\n", code, msg);
+    assert(false);
+}
+
 void on_scroll(GLFWwindow *win, double x, double y)
 {
     g_inputs->mouse_wheel = y;
@@ -38,19 +44,22 @@ void on_char(GLFWwindow *win, unsigned int c)
     inputs_insert_char(g_inputs, c);
 }
 
+void on_drop(GLFWwindow* win, int count, const char** paths)
+{
+    int i;
+    for (i = 0;  i < count;  i++)
+        goxel_import_file(paths[i], NULL);
+}
+
 typedef struct
 {
     char *input;
     char *export;
-    char *script;
-    int script_args_nb;
-    const char *script_args[32];
     float scale;
 } args_t;
 
 #define OPT_HELP 1
-#define OPT_SCRIPT 2
-#define OPT_VERSION 3
+#define OPT_VERSION 2
 
 typedef struct {
     const char *name;
@@ -64,8 +73,6 @@ static const gox_option_t OPTIONS[] = {
     {"export", 'e', required_argument, "FILENAME",
         .help="Export the image to a file"},
     {"scale", 's', required_argument, "FLOAT", .help="Set UI scale"},
-    {"script", OPT_SCRIPT, required_argument, "FILENAME",
-        .help="Run a script and exit"},
     {"help", OPT_HELP, .help="Give this help list"},
     {"version", OPT_VERSION, .help="Print program version"},
     {}
@@ -122,9 +129,6 @@ static void parse_options(int argc, char **argv, args_t *args)
         case 's':
             args->scale = atof(optarg);
             break;
-        case OPT_SCRIPT:
-            args->script = optarg;
-            break;
         case OPT_HELP:
             print_help();
             exit(0);
@@ -136,12 +140,7 @@ static void parse_options(int argc, char **argv, args_t *args)
         }
     }
     if (optind < argc) {
-        if (args->script) {
-            while (optind < argc)
-                args->script_args[args->script_args_nb++] = argv[optind++];
-        } else {
-            args->input = argv[optind];
-        }
+        args->input = argv[optind];
     }
 }
 
@@ -151,7 +150,14 @@ static void loop_function(void)
     int fb_size[2], win_size[2];
     int i;
     double xpos, ypos;
-    float scale = g_scale;
+    float xscale, yscale;
+    float scale;
+    GLFWmonitor *monitor;
+
+    (void)monitor;
+    (void)fb_size;
+    (void)xscale;
+    (void)yscale;
 
     if (    !glfwGetWindowAttrib(g_window, GLFW_VISIBLE) ||
              glfwGetWindowAttrib(g_window, GLFW_ICONIFIED)) {
@@ -162,24 +168,37 @@ static void loop_function(void)
     // On retina display, this might not be the same as the window
     // size.
     glfwGetWindowSize(g_window, &win_size[0], &win_size[1]);
-    glfwGetFramebufferSize(g_window, &fb_size[0], &fb_size[1]);
-    g_inputs->window_size[0] = win_size[0] / scale;
-    g_inputs->window_size[1] = win_size[1] / scale;
-    g_inputs->scale = fb_size[0] * scale / win_size[0];
+
+    scale = g_scale;
+    // Note: when all platforms get updated to glfw 3.3+, we should remove
+    // this test.
+    #if GLFW_VERSION_MAJOR >= 3 && GLFW_VERSION_MINOR >= 3
+        monitor = glfwGetPrimaryMonitor();
+        glfwGetMonitorContentScale(monitor, &xscale, &yscale);
+        scale *= xscale;
+    #else
+        glfwGetFramebufferSize(g_window, &fb_size[0], &fb_size[1]);
+        scale *= (float)fb_size[0] / win_size[0];
+    #endif
+
+    g_inputs->window_size[0] = win_size[0];
+    g_inputs->window_size[1] = win_size[1];
+    g_inputs->scale = scale;
 
     GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
 
-    for (i = 0; i <= GLFW_KEY_LAST; i++) {
+    for (i = GLFW_KEY_SPACE; i <= GLFW_KEY_LAST; i++) {
         g_inputs->keys[i] = glfwGetKey(g_window, i) == GLFW_PRESS;
     }
     glfwGetCursorPos(g_window, &xpos, &ypos);
-    vec2_set(g_inputs->touches[0].pos, xpos / scale, ypos / scale);
+    vec2_set(g_inputs->touches[0].pos, xpos, ypos);
     g_inputs->touches[0].down[0] =
         glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     g_inputs->touches[0].down[1] =
         glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
     g_inputs->touches[0].down[2] =
         glfwGetMouseButton(g_window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+
     goxel_iter(g_inputs);
     goxel_render();
 
@@ -268,6 +287,7 @@ int main(int argc, char **argv)
 
     g_scale = args.scale;
 
+    glfwSetErrorCallback(on_glfw_error);
     glfwInit();
     glfwWindowHint(GLFW_SAMPLES, 4);
     monitor = glfwGetPrimaryMonitor();
@@ -282,6 +302,7 @@ int main(int argc, char **argv)
     glfwMakeContextCurrent(window);
     if (!DEFINED(EMSCRIPTEN))
         glfwSetScrollCallback(window, on_scroll);
+    glfwSetDropCallback(window, on_drop);
     glfwSetCharCallback(window, on_char);
     glfwSetInputMode(window, GLFW_STICKY_MOUSE_BUTTONS, false);
     set_window_icon(window);
@@ -297,19 +318,14 @@ int main(int argc, char **argv)
     }
 
     if (args.input)
-        action_exec2("import", "p", args.input);
-
-    if (args.script) {
-        script_run(args.script, args.script_args_nb, args.script_args);
-        goto end;
-    }
+        goxel_import_file(args.input, NULL);
 
     if (args.export) {
         if (!args.input) {
             LOG_E("trying to export an empty image");
             ret = -1;
         } else {
-            ret = action_exec2("export", "p", args.export);
+            ret = goxel_export_to_file(args.export, NULL);
         }
         goto end;
     }

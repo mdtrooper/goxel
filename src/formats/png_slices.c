@@ -17,8 +17,9 @@
  */
 
 #include "goxel.h"
+#include "file_format.h"
 
-static void export_as_png_slices(const char *path)
+static int export_as_png_slices(const image_t *image, const char *path)
 {
     float box[4][4];
     const mesh_t *mesh;
@@ -27,11 +28,8 @@ static void export_as_png_slices(const char *path)
     uint8_t *img;
     mesh_iterator_t iter = {0};
 
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                   "png\0*.png\0", NULL, "untitled.png");
-    if (!path) return;
-    mesh = goxel_get_layers_mesh();
-    mat4_copy(goxel.image->box, box);
+    mesh = goxel_get_layers_mesh(image);
+    mat4_copy(image->box, box);
     if (box_is_null(box)) mesh_get_box(mesh, true, box);
     w = box[0][0] * 2;
     h = box[1][1] * 2;
@@ -53,16 +51,12 @@ static void export_as_png_slices(const char *path)
         img[(y * w * d + z * w + x) * 4 + 3] = c[3];
     }
     img_write(img, w * d, h, 4, path);
-
     free(img);
+    return 0;
 }
 
-ACTION_REGISTER(export_as_png_slices,
-    .help = "Export the image as a png slices file",
-    .cfunc = export_as_png_slices,
-    .csig = "vp",
-    .file_format = {
-        .name = "png slices",
-        .ext = "*.png\0",
-    },
+FILE_FORMAT_REGISTER(png_slices,
+    .name = "png slices",
+    .ext = "png\0*.png\0",
+    .export_func = export_as_png_slices,
 )

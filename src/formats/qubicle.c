@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "file_format.h"
 
 // Load qubicle files.
 
@@ -35,7 +36,7 @@ static void apply_orientation(int orientation, int pos[3])
     }
 }
 
-static void qubicle_import(const char *path)
+static int qubicle_import(image_t *image, const char *path)
 {
     FILE *file;
     int version, color_format, orientation, compression, vmask, mat_count;
@@ -51,10 +52,6 @@ static void qubicle_import(const char *path)
     const uint32_t NEXTSLICEFLAG = 6;
     layer_t *layer;
     mesh_iterator_t iter = {0};
-
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                        NULL, NULL, NULL);
-    if (!path) return;
 
     file = fopen(path, "rb");
     version = READ(uint32_t, file);
@@ -128,9 +125,10 @@ static void qubicle_import(const char *path)
             }
         }
     }
+    return 0;
 }
 
-static void qubicle_export(const image_t *img, const char *path)
+static int qubicle_export(const image_t *img, const char *path)
 {
     FILE *file;
     int i, count, x, y, z, pos[3], bbox[2][3];
@@ -180,32 +178,12 @@ static void qubicle_export(const image_t *img, const char *path)
         i++;
     }
     fclose(file);
+    return 0;
 }
 
-static void export_as_qubicle(const char *path)
-{
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                    "qubicle\0*.qb\0", NULL, "untitled.qb");
-    if (!path) return;
-    qubicle_export(goxel.image, path);
-}
-
-ACTION_REGISTER(import_qubicle,
-    .help = "Import a qubicle file",
-    .cfunc = qubicle_import,
-    .csig = "vp",
-    .file_format = {
-        .name = "qubicle",
-        .ext = "*.qb\0",
-    },
-)
-
-ACTION_REGISTER(export_as_qubicle,
-    .help = "Save the image as a qubicle 3d file",
-    .cfunc = export_as_qubicle,
-    .csig = "vp",
-    .file_format = {
-        .name = "qubicle",
-        .ext = "*.qb\0",
-    },
+FILE_FORMAT_REGISTER(qubicle,
+    .name = "qubicle",
+    .ext = "qubicle\0*.qb\0",
+    .import_func = qubicle_import,
+    .export_func = qubicle_export,
 )

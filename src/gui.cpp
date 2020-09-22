@@ -49,7 +49,6 @@ void gui_menu(void);
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #define IMGUI_DISABLE_OBSOLETE_FUNCTIONS
-#define IMGUI_INCLUDE_IMGUI_USER_INL
 
 #include "../ext_src/imgui/imgui.h"
 #include "../ext_src/imgui/imgui_internal.h"
@@ -57,6 +56,11 @@ void gui_menu(void);
 #ifndef __clang__
 #pragma GCC diagnostic pop
 #endif
+
+static ImVec4 imvec4(const uint8_t v[4])
+{
+    return ImVec4(v[0] / 255., v[1] / 255., v[2] / 255., v[3] / 255.);
+}
 
 static inline ImVec4 color_lighten(ImVec4 c, float k)
 {
@@ -67,15 +71,121 @@ static inline ImVec4 color_lighten(ImVec4 c, float k)
 }
 
 namespace ImGui {
-    bool GoxInputFloat(const char *label, float *v, float step = 0.1,
-                       float minv = -FLT_MAX, float maxv = FLT_MAX,
-                       const char *format = "%.1f");
-
-    void GoxBox(ImVec2 pos, ImVec2 size, bool selected,
-                int rounding_corners_flags = ~0);
     void GoxBox2(ImVec2 pos, ImVec2 size, ImVec4 color, bool fill,
                  float thickness = 1,
-                 int rounding_corners_flags = ~0);
+                 int rounding_corners_flags = ~0)
+    {
+        ImGuiContext& g = *GImGui;
+        const ImGuiStyle& style = g.Style;
+        ImGuiWindow* window = GetCurrentWindow();
+        float r = style.FrameRounding;
+        size.x = size.x ?: ImGui::GetContentRegionAvail().x;
+        if (fill) {
+            window->DrawList->AddRectFilled(
+                    pos, pos + size,
+                    ImGui::ColorConvertFloat4ToU32(color), r,
+                    rounding_corners_flags);
+        } else {
+            window->DrawList->AddRect(
+                    pos, pos + size,
+                    ImGui::ColorConvertFloat4ToU32(color), r,
+                    rounding_corners_flags, thickness);
+        }
+    }
+
+    void GoxBox(ImVec2 pos, ImVec2 size, bool selected,
+                int rounding_corners_flags = ~0)
+    {
+        ImGuiContext& g = *GImGui;
+        const ImGuiStyle& style = g.Style;
+        ImVec4 color  = style.Colors[selected ? ImGuiCol_ButtonActive :
+                                     ImGuiCol_Button];
+        return GoxBox2(pos, size, color, true, 1, rounding_corners_flags);
+    }
+
+    bool GoxInputFloat(const char *label, float *v, float step,
+                       float minv, float maxv, const char *format)
+    {
+        const theme_t *theme = theme_get();
+        bool ret = false;
+        ImGuiContext& g = *GImGui;
+        const ImGuiStyle& style = g.Style;
+        const ImVec2 button_sz = ImVec2(
+                max(g.FontSize * 2.0f, theme->sizes.item_height),
+                g.FontSize + style.FramePadding.y * 2.0f);
+        int button_flags =
+            ImGuiButtonFlags_Repeat | ImGuiButtonFlags_DontClosePopups;
+        float speed = step / 20;
+        uint8_t color[4];
+        char buf[128];
+        bool input_active;
+        ImVec4 text_color;
+
+        ImGui::PushID(label);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 1));
+
+        // XXX: commented out for the moment so that diabled input work.
+        // theme_get_color(THEME_GROUP_WIDGET, THEME_COLOR_TEXT, 0, color);
+        // ImGui::PushStyleColor(ImGuiCol_Text, imvec4(color));
+
+        theme_get_color(THEME_GROUP_WIDGET, THEME_COLOR_INNER, 0, color);
+        ImGui::PushStyleColor(ImGuiCol_Button, imvec4(color));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, imvec4(color));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,
+            color_lighten(imvec4(color), 1.2));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            color_lighten(imvec4(color), 1.2));
+
+        ImGui::SetWindowFontScale(0.75);
+        if (ImGui::ButtonEx("◀", button_sz, button_flags)) {
+            (*v) -= step;
+            ret = true;
+        }
+        ImGui::SetWindowFontScale(1);
+
+        ImGui::SameLine();
+        ImGui::PushItemWidth(
+                ImGui::GetContentRegionAvail().x -
+                button_sz.x - style.ItemSpacing.x);
+
+        input_active = ImGui::TempInputTextIsActive(ImGui::GetID(""));
+        text_color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        if (!input_active)
+            text_color = ImVec4(0, 0, 0, 0);
+        ImGui::PushStyleColor(ImGuiCol_Text, text_color);
+        ret |= ImGui::DragFloat("", v, speed, minv, maxv, format, 1.0);
+        ImGui::PopStyleColor();
+
+        if (!input_active) {
+            snprintf(buf, sizeof(buf), "%s:", label);
+            ImGui::RenderTextClipped(ImGui::GetItemRectMin(),
+                                     ImGui::GetItemRectMax(),
+                                     buf, NULL, NULL, ImVec2(0, 0.5));
+            snprintf(buf, sizeof(buf), format, *v);
+            ImGui::RenderTextClipped(ImGui::GetItemRectMin(),
+                                     ImGui::GetItemRectMax(),
+                                     buf, NULL, NULL, ImVec2(1, 0.5));
+        }
+
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+
+        ImGui::SetWindowFontScale(0.75);
+        if (ImGui::ButtonEx("▶", button_sz, button_flags)) {
+            (*v) += step;
+            ret = true;
+        }
+        ImGui::SetWindowFontScale(1);
+
+        ImGui::PopStyleColor(4);
+        ImGui::PopStyleVar();
+        ImGui::PopID();
+
+        if (ret)
+            *v = clamp(*v, minv, maxv);
+
+        return ret;
+    }
 };
 
 static texture_t *g_tex_icons = NULL;
@@ -172,8 +282,10 @@ static void on_click(void) {
 
 static bool isCharPressed(int c)
 {
+    // TODO: remove this function if possible.
     ImGuiContext& g = *GImGui;
-    return g.IO.InputCharacters[0] == c;
+    if (g.IO.InputQueueCharacters.Size == 0) return false;
+    return g.IO.InputQueueCharacters[0] == c;
 }
 
 #define COLOR(g, c, s) ({ \
@@ -478,7 +590,7 @@ static int check_action_shortcut(action_t *action, void *user)
     }
     if (    (check_char && isCharPressed(s[0])) ||
             (check_key && ImGui::IsKeyPressed(s[0], false))) {
-        action_exec(action, "");
+        action_exec(action);
         return 1;
     }
     return 0;
@@ -634,7 +746,7 @@ void gui_iter(const inputs_t *inputs)
 
     // Handle the shortcuts.  XXX: this should be done with actions.
     if (ImGui::IsKeyPressed(KEY_DELETE, false))
-        action_exec2("layer_clear", "");
+        action_exec2(ACTION_layer_clear);
 
     if (!io.WantCaptureKeyboard) {
         float last_tool_radius = goxel.tool_radius;
@@ -907,12 +1019,10 @@ bool gui_angle(const char *id, float *v, int vmin, int vmax)
     return ret;
 }
 
-bool gui_action_button(const char *id, const char *label, float size,
-                       const char *sig, ...)
+bool gui_action_button(int id, const char *label, float size)
 {
     bool ret;
     const action_t *action;
-    va_list ap;
 
     action = action_get(id, true);
     assert(action);
@@ -920,30 +1030,10 @@ bool gui_action_button(const char *id, const char *label, float size,
     ret = gui_button(label, size, action->icon);
     if (IsItemHovered()) goxel_set_help_text(action_get(id, true)->help);
     if (ret) {
-        va_start(ap, sig);
-        action_execv(action_get(id, true), sig, ap);
-        va_end(ap);
+        action_exec(action_get(id, true));
     }
     PopID();
     return ret;
-}
-
-bool gui_action_checkbox(const char *id, const char *label)
-{
-    bool b;
-    const action_t *action = action_get(id, true);
-    action_exec(action, ">b", &b);
-    if (ImGui::Checkbox(label, &b)) {
-        action_exec(action, "b", b);
-        return true;
-    }
-    if (ImGui::IsItemHovered()) {
-        if (!*action->shortcut)
-            goxel_set_help_text(action->help);
-        else
-            goxel_set_help_text("%s (%s)", action->help, action->shortcut);
-    }
-    return false;
 }
 
 static bool _selectable(const char *label, bool *v, const char *tooltip,
@@ -1027,7 +1117,7 @@ bool gui_selectable_icon(const char *name, bool *v, int icon)
 
 float gui_get_avail_width(void)
 {
-    return GetContentRegionAvailWidth();
+    return ImGui::GetContentRegionAvail().x;
 }
 
 void gui_text(const char *label, ...)
@@ -1160,9 +1250,9 @@ bool gui_button(const char *label, float size, int icon)
     ImVec2 center;
     int w, isize;
 
-    button_size = ImVec2(size * GetContentRegionAvailWidth(),
+    button_size = ImVec2(size * GetContentRegionAvail().x,
                          theme->sizes.item_height);
-    if (size == -1) button_size.x = GetContentRegionAvailWidth();
+    if (size == -1) button_size.x = GetContentRegionAvail().x;
     if (size == 0 && (label == NULL || label[0] == '#')) {
         button_size.x = theme->sizes.icons_height;
         button_size.y = theme->sizes.icons_height;
@@ -1198,7 +1288,7 @@ bool gui_button_right(const char *label, int icon)
     w = max(w, theme->sizes.item_height);
     w += theme->sizes.item_padding_h;
     gui_same_line();
-    ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvailWidth() - w, 0));
+    ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x - w, 0));
     gui_same_line();
     return gui_button(label, 0, icon);
 }
@@ -1240,7 +1330,7 @@ bool gui_combo(const char *label, int *v, const char **names, int nb)
     return ret;
 }
 
-bool gui_combo_begin(const char *label, const void *current)
+bool gui_combo_begin(const char *label, const char *preview)
 {
     bool ret;
     const theme_t *theme = theme_get();
@@ -1250,7 +1340,7 @@ bool gui_combo_begin(const char *label, const void *current)
                         ImVec2(0, (theme->sizes.item_height - font_size) / 2));
     ImGui::PushStyleColor(ImGuiCol_PopupBg, COLOR(WIDGET, INNER, 0));
     ImGui::PushItemWidth(-1);
-    ret = ImGui::BeginCombo(label, (const char*)current);
+    ret = ImGui::BeginCombo(label, preview);
 
     if (!ret) {
         ImGui::PopItemWidth();
@@ -1364,7 +1454,7 @@ void gui_alert(const char *title, const char *msg)
 bool gui_collapsing_header(const char *label, bool default_opened)
 {
     if (default_opened)
-        ImGui::SetNextTreeNodeOpen(true, ImGuiCond_Once);
+        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     return ImGui::CollapsingHeader(label);
 }
 
@@ -1534,7 +1624,7 @@ void gui_menu_end(void)
     return ImGui::EndMenu();
 }
 
-bool gui_menu_item(const char *action, const char *label, bool enabled)
+bool gui_menu_item(int action, const char *label, bool enabled)
 {
     const action_t *a = NULL;
     if (action) {
@@ -1542,7 +1632,7 @@ bool gui_menu_item(const char *action, const char *label, bool enabled)
         assert(a);
     }
     if (ImGui::MenuItem(label, a ? a->shortcut : NULL, false, enabled)) {
-        if (a) action_exec(a, "");
+        if (a) action_exec(a);
         return true;
     }
     return false;
@@ -1668,7 +1758,7 @@ bool gui_panel_header(const char *label)
     const theme_t *theme = theme_get();
     bool ret;
     float label_w = ImGui::CalcTextSize(label).x;
-    float w = ImGui::GetContentRegionAvailWidth() - theme->sizes.item_height;
+    float w = ImGui::GetContentRegionAvail().x - theme->sizes.item_height;
     gui_push_id("panel_header");
     ImGui::Dummy(ImVec2((w - label_w) / 2, 0));
     gui_same_line();

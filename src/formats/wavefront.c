@@ -17,6 +17,7 @@
  */
 
 #include "goxel.h"
+#include "file_format.h"
 
 typedef struct {
     union {
@@ -66,7 +67,7 @@ static int lines_add(UT_array *lines, const line_t *line, int search_nb)
     return utarray_len(lines);
 }
 
-static void export(const mesh_t *mesh, const char *path, bool ply)
+static int export(const mesh_t *mesh, const char *path, bool ply)
 {
     // XXX: Merge faces that can be merged into bigger ones.
     //      Allow to chose between quads or triangles.
@@ -187,70 +188,29 @@ static void export(const mesh_t *mesh, const char *path, bool ply)
     utarray_free(lines_v);
     utarray_free(lines_vn);
     free(verts);
+    return 0;
 }
 
-void wavefront_export(const mesh_t *mesh, const char *path)
+static int wavefront_export(const image_t *image, const char *path)
 {
-    export(mesh, path, false);
+    const mesh_t *mesh = goxel_get_layers_mesh(image);
+    return export(mesh, path, false);
 }
 
-void ply_export(const mesh_t *mesh, const char *path)
+int ply_export(const image_t *image, const char *path)
 {
-    export(mesh, path, true);
+    const mesh_t *mesh = goxel_get_layers_mesh(image);
+    return export(mesh, path, true);
 }
 
-static void export_as_obj(const char *path)
-{
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                    "obj\0*.obj\0", NULL, "untitled.obj");
-    if (!path) return;
-    wavefront_export(goxel_get_layers_mesh(), path);
-}
-
-ACTION_REGISTER(mesh_export_as_obj,
-    .help = "Export the mesh as a wavefront obj file",
-    .cfunc = wavefront_export,
-    .csig = "vpp",
-    .file_format = {
-        .name = "obj",
-        .ext = "*.obj\0",
-    },
+FILE_FORMAT_REGISTER(obj,
+    .name = "obj",
+    .ext = "obj\0*.obj\0",
+    .export_func = wavefront_export,
 )
 
-ACTION_REGISTER(export_as_obj,
-    .help = "Export the image as a wavefront obj file",
-    .cfunc = export_as_obj,
-    .csig = "vp",
-    .file_format = {
-        .name = "obj",
-        .ext = "*.obj\0",
-    },
-)
-
-static void export_as_ply(const char *path)
-{
-    path = path ?: noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                    "ply\0*.ply\0", NULL, "untitled.ply");
-    if (!path) return;
-    ply_export(goxel_get_layers_mesh(), path);
-}
-
-ACTION_REGISTER(mesh_export_as_ply,
-    .help = "Export the mesh as a ply file",
-    .cfunc = ply_export,
-    .csig = "vpp",
-    .file_format = {
-        .name = "ply",
-        .ext = "*.ply\0",
-    },
-)
-
-ACTION_REGISTER(export_as_ply,
-    .help = "Save the image as a ply file",
-    .cfunc = export_as_ply,
-    .csig = "vp",
-    .file_format = {
-        .name = "ply",
-        .ext = "*.ply\0",
-    },
+FILE_FORMAT_REGISTER(ply,
+    .name = "ply",
+    .ext = "ply\0*.ply\0",
+    .export_func = ply_export,
 )
